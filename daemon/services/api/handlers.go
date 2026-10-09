@@ -1249,7 +1249,7 @@ func (s *Server) handleDiskSpin(w http.ResponseWriter, r *http.Request, up bool)
 		logger.Error("API: Failed to spin %s disk %s: %v", action, diskID, err)
 		respondJSON(w, http.StatusInternalServerError, dto.Response{
 			Success:   false,
-			Message:   fmt.Sprintf("Failed to spin %s disk %s: %v", action, diskID, err),
+			Message:   fmt.Sprintf("Failed to spin %s disk %s", action, diskID),
 			Timestamp: time.Now(),
 		})
 		return
