@@ -214,7 +214,7 @@ func TestParseScanInfo(t *testing.T) {
 		{
 			name:         "scrub in progress",
 			line:         "scan: scrub in progress since Sun Nov 10 02:39:43 2025",
-			expectStatus: "in progress",
+			expectStatus: "scrub in progress",
 			expectState:  "scanning",
 		},
 		{
@@ -234,7 +234,7 @@ func TestParseScanInfo(t *testing.T) {
 		{
 			name:         "resilver in progress",
 			line:         "scan: resilver in progress since Thu Jan 01 00:00:00 2025",
-			expectStatus: "in progress",
+			expectStatus: "resilver in progress",
 			expectState:  "scanning",
 		},
 		{

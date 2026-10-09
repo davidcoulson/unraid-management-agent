@@ -1,0 +1,12 @@
+  pool: ssd8tb
+ state: ONLINE
+  scan: resilvered 4.12T in 03:12:45 with 0 errors on Wed Oct  7 12:12:46 2026
+config:
+
+	NAME           STATE     READ WRITE CKSUM
+	ssd8tb         ONLINE       0     0     0
+	  mirror-0     ONLINE       0     0     0
+	    sdb1       ONLINE       0     0     0
+	    sdc1       ONLINE       0     0     0
+
+errors: No known data errors

@@ -1,0 +1,15 @@
+  pool: ssd8tb
+ state: ONLINE
+  scan: scrub paused since Wed Oct  7 10:15:00 2026
+	scrub started on Wed Oct  7 09:00:01 2026
+	2.10T / 4.12T scanned, 1.98T / 4.12T issued
+	0B repaired, 48.06% done
+config:
+
+	NAME           STATE     READ WRITE CKSUM
+	ssd8tb         ONLINE       0     0     0
+	  mirror-0     ONLINE       0     0     0
+	    sdb1       ONLINE       0     0     0
+	    sdc1       ONLINE       0     0     0
+
+errors: No known data errors

@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Temperature metric filtering from lm-sensors** — `parseSensorsOutput` now reports only
   `temp*_input` channels, excluding voltage/current/power/fan `_input` metrics that were
   previously misreported as Celsius temperatures. ([#177](https://github.com/ruaan-deysel/unraid-management-agent/pull/177)).
+- **ZFS scrub/resilver times always zero** — `parseScanInfo` now parses the `zpool status`
+  `scan:` line formats (completed, canceled, in progress and paused scrubs and resilvers), so
+  `/api/v1/zfs/pools` reports `scan_start_time`/`scan_end_time` (local-time ctime, with the start
+  time derived from the printed duration including `N days HH:MM:SS`), `scan_repaired_bytes` and
+  `scan_progress_percent`. Completed resilvers are no longer reported as in progress, and
+  `scan_status` uses the documented `scrub in progress`/`resilver in progress` values (plus
+  `scrub paused`, `scrub canceled`, `resilver completed`, `resilver canceled`; `scan_state` gains
+  `paused`). ([#185](https://github.com/ruaan-deysel/unraid-management-agent/issues/185)).
 
 ## [2026.09.01] - 2026-09-28
 

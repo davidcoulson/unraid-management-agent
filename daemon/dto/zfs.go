@@ -34,13 +34,13 @@ type ZFSPool struct {
 	VDEVs []ZFSVdev `json:"vdevs"` // Pool virtual devices
 
 	// Scrub Information
-	ScanStatus        string    `json:"scan_status,omitempty" example:"scrub completed"` // "scrub in progress", "scrub completed", "resilver in progress"
-	ScanState         string    `json:"scan_state,omitempty" example:"finished"`         // "scanning", "finished", "canceled"
-	ScanErrors        int       `json:"scan_errors" example:"0"`                         // Errors found during last scrub
-	ScanRepairedBytes uint64    `json:"scan_repaired_bytes" example:"0"`                 // Data repaired in last scrub
-	ScanStartTime     time.Time `json:"scan_start_time"`                                 // When scrub started
-	ScanEndTime       time.Time `json:"scan_end_time"`                                   // When scrub ended
-	ScanProgressPct   float64   `json:"scan_progress_percent" example:"100"`             // Scrub progress %
+	ScanStatus        string    `json:"scan_status,omitempty" example:"scrub completed"` // "scrub|resilver" + " in progress", " paused" (scrub only), " completed", " canceled"
+	ScanState         string    `json:"scan_state,omitempty" example:"finished"`         // "scanning", "paused", "finished", "canceled"
+	ScanErrors        int       `json:"scan_errors" example:"0"`                         // Errors found during last completed scan
+	ScanRepairedBytes uint64    `json:"scan_repaired_bytes" example:"0"`                 // Data repaired by the last/current scan
+	ScanStartTime     time.Time `json:"scan_start_time"`                                 // When the scan started (zero if unknown)
+	ScanEndTime       time.Time `json:"scan_end_time"`                                   // When the scan completed or was canceled (zero if unknown)
+	ScanProgressPct   float64   `json:"scan_progress_percent" example:"100"`             // Scan progress %
 
 	// Error Counters
 	ReadErrors     uint64 `json:"read_errors" example:"0"`

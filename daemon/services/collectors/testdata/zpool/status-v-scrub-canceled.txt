@@ -1,0 +1,12 @@
+  pool: ssd8tb
+ state: ONLINE
+  scan: scrub canceled on Wed Oct  7 10:15:00 2026
+config:
+
+	NAME           STATE     READ WRITE CKSUM
+	ssd8tb         ONLINE       0     0     0
+	  mirror-0     ONLINE       0     0     0
+	    sdb1       ONLINE       0     0     0
+	    sdc1       ONLINE       0     0     0
+
+errors: No known data errors

@@ -1,0 +1,27 @@
+  pool: exos24tb
+ state: ONLINE
+  scan: scrub repaired 0B in 2 days 00:06:12 with 0 errors on Thu Sep 17 22:06:13 2026
+config:
+
+	NAME        STATE     READ WRITE CKSUM
+	exos24tb    ONLINE       0     0     0
+	  raidz2-0  ONLINE       0     0     0
+	    sdy1    ONLINE       0     0     0
+	    sdz1    ONLINE       0     0     0
+	    sdaa1   ONLINE       0     0     0
+	    sdab1   ONLINE       0     0     0
+	    sdd1    ONLINE       0     0     0
+	    sde1    ONLINE       0     0     0
+	    sdf1    ONLINE       0     0     0
+	    sdg1    ONLINE       0     0     0
+	  raidz2-1  ONLINE       0     0     0
+	    sdaj1   ONLINE       0     0     0
+	    sdak1   ONLINE       0     0     0
+	    sdal1   ONLINE       0     0     0
+	    sdam1   ONLINE       0     0     0
+	    sdo1    ONLINE       0     0     0
+	    sdp1    ONLINE       0     0     0
+	    sdq1    ONLINE       0     0     0
+	    sdr1    ONLINE       0     0     0
+
+errors: No known data errors

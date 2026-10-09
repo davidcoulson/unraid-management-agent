@@ -1,0 +1,17 @@
+  pool: ssd8tb
+ state: DEGRADED
+status: One or more devices is currently being resilvered.  The pool will
+	continue to function, possibly in a degraded state.
+action: Wait for the resilver to complete.
+  scan: resilver in progress since Wed Oct  7 09:00:01 2026
+	1.02T / 4.12T scanned at 1.10G/s, 512G / 4.12T issued at 552M/s
+	511G resilvered, 12.14% done, 01:54:00 to go
+config:
+
+	NAME           STATE     READ WRITE CKSUM
+	ssd8tb         DEGRADED     0     0     0
+	  mirror-0     DEGRADED     0     0     0
+	    sdb1       ONLINE       0     0     0
+	    sdc1       DEGRADED     0     0     0  (resilvering)
+
+errors: No known data errors

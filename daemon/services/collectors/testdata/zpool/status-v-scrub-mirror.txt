@@ -1,0 +1,12 @@
+  pool: flash
+ state: ONLINE
+  scan: scrub repaired 0B in 00:00:02 with 0 errors on Sun Oct  4 05:00:03 2026
+config:
+
+	NAME           STATE     READ WRITE CKSUM
+	flash          ONLINE       0     0     0
+	  mirror-0     ONLINE       0     0     0
+	    nvme2n1p3  ONLINE       0     0     0
+	    nvme6n1p3  ONLINE       0     0     0
+
+errors: No known data errors

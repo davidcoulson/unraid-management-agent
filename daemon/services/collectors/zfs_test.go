@@ -157,7 +157,7 @@ func TestZFSScanStatusParsing(t *testing.T) {
 		{
 			name:           "scrub in progress",
 			line:           "scan: scrub in progress since Sun Nov 10 02:39:43 2025",
-			expectedStatus: "in progress",
+			expectedStatus: "scrub in progress",
 			expectedState:  "scanning",
 		},
 		{
@@ -169,14 +169,20 @@ func TestZFSScanStatusParsing(t *testing.T) {
 		{
 			name:           "resilver in progress",
 			line:           "scan: resilver in progress since Sun Nov 10 02:39:43 2025",
-			expectedStatus: "in progress", // "in progress" matches first
+			expectedStatus: "resilver in progress",
 			expectedState:  "scanning",
 		},
 		{
-			name:           "resilver alone",
+			name:           "resilver completed",
+			line:           "scan: resilvered 1.21T in 05:12:00 with 0 errors on Sun Nov 10 02:39:43 2025",
+			expectedStatus: "resilver completed",
+			expectedState:  "finished",
+		},
+		{
+			name:           "unknown format leaves fields unset",
 			line:           "scan: resilver started since Sun Nov 10 02:39:43 2025",
-			expectedStatus: "resilver in progress",
-			expectedState:  "scanning",
+			expectedStatus: "",
+			expectedState:  "",
 		},
 	}
 
