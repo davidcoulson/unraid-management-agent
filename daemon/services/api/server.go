@@ -219,6 +219,8 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/array/parity-check/history", s.handleParityCheckHistory).Methods("GET")
 	api.HandleFunc("/array/parity-check/schedule", s.handleParitySchedule).Methods("GET") // Issue #47
 	api.HandleFunc("/array/clear-disk-stats", s.handleClearDiskStats).Methods("POST")
+	api.HandleFunc("/disks/{id}/spinup", s.handleDiskSpinUp).Methods("POST")
+	api.HandleFunc("/disks/{id}/spindown", s.handleDiskSpinDown).Methods("POST")
 
 	// Configuration endpoints (read-only)
 	api.HandleFunc("/shares/{name}/config", s.handleShareConfig).Methods("GET")

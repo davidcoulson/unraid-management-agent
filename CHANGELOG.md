@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Temperature metric filtering from lm-sensors** — `parseSensorsOutput` now reports only
   `temp*_input` channels, excluding voltage/current/power/fan `_input` metrics that were
   previously misreported as Celsius temperatures. ([#177](https://github.com/ruaan-deysel/unraid-management-agent/pull/177)).
+- **Disk spin up/down REST endpoints** ([#178](https://github.com/ruaan-deysel/unraid-management-agent/issues/178)) —
+  added `POST /api/v1/disks/{id}/spinup` and `POST /api/v1/disks/{id}/spindown`,
+  which the Home Assistant integration's disk spin switches already call (they got
+  404). `{id}` may be the disk id, device or name; it is resolved against the disk
+  collector cache, so unknown disks return 404, and the existing array controller
+  spins the disk via emhttpd.
 
 ## [2026.09.01] - 2026-09-28
 
