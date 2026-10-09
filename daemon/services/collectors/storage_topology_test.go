@@ -237,10 +237,12 @@ func TestStorageTopologyGatherFromFixtures(t *testing.T) {
 		t.Errorf("healthy shelves reported problems: %v %v", e242.Problems, e245.Problems)
 	}
 
-	// The HighPoint NVMe enclosure reports critical sensors; 0xFFFF voltages have no value.
+	// The HighPoint NVMe enclosure reports a critical temperature sensor.
 	hpt := topo.Enclosures[2]
-	if hpt.Status != "Critical" || hpt.EnclosureDeviceID != nil || len(hpt.Problems) != 5 ||
-		hpt.VoltageSensors[0].Value != nil || !hpt.VoltageSensors[0].Problem ||
+	// Its voltage sensors are "Critical" only because of the invalid 0xFFFF reading:
+	// the status is kept, but they are not counted as problems.
+	if hpt.Status != "Critical" || hpt.EnclosureDeviceID != nil || len(hpt.Problems) != 1 ||
+		hpt.VoltageSensors[0].Value != nil || hpt.VoltageSensors[0].Problem || hpt.VoltageSensors[0].Status != "Critical" ||
 		hpt.VoltageSensors[0].Description != "VoltageSense01" || *hpt.TemperatureSensors[0].Value != 84 {
 		t.Errorf("unexpected HPT enclosure: status=%s problems=%v volt=%+v", hpt.Status, hpt.Problems, hpt.VoltageSensors[0])
 	}

@@ -373,10 +373,9 @@ func buildSESEnclosure(paths []sesPath) dto.StorageEnclosure {
 			st := el.Status
 			kv := parseDescriptorKV(el.Descriptor)
 			status := st.Status.Meaning
-			if t != sesTypeDeviceSlot && t != sesTypeArrayDeviceSlot {
-				if s := sesSeverity(status); s > worst {
-					worst = s
-				}
+			severity := sesSeverity(status)
+			if t == sesTypeDeviceSlot || t == sesTypeArrayDeviceSlot {
+				severity = 0 // slot status describes the drive, not the enclosure
 			}
 			switch t {
 			case sesTypePowerSupply:
@@ -427,11 +426,21 @@ func buildSESEnclosure(paths []sesPath) dto.StorageEnclosure {
 					CritOver: bool(st.CritOver), CritUnder: bool(st.CritUnder),
 					Problem: sesProblem(st, st.Fail, st.WarnOver, st.WarnUnder, st.CritOver, st.CritUnder),
 				}
+				reading := st.Current
 				if t == sesTypeVoltage {
-					sensor.Value = sesReadingValue(st.Voltage)
+					reading = st.Voltage
+				}
+				sensor.Value = sesReadingValue(reading)
+				if sensor.Value == nil {
+					// Without a valid reading the threshold flags only reflect the
+					// invalid value (e.g. 0xFFFF compared against a limit); the
+					// status is still reported, but it is not treated as a problem.
+					sensor.Problem = false
+					severity = 0
+				}
+				if t == sesTypeVoltage {
 					encl.VoltageSensors = append(encl.VoltageSensors, sensor)
 				} else {
-					sensor.Value = sesReadingValue(st.Current)
 					encl.CurrentSensors = append(encl.CurrentSensors, sensor)
 				}
 			case sesTypeESCElectronics:
@@ -478,6 +487,9 @@ func buildSESEnclosure(paths []sesPath) dto.StorageEnclosure {
 				if sn := kv["SN"]; sn != "" && encl.SerialNumber == "" {
 					encl.SerialNumber = sn
 				}
+			}
+			if severity > worst {
+				worst = severity
 			}
 		}
 	}

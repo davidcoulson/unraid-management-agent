@@ -216,7 +216,7 @@ func sesEl(typ, num int, status, desc string, st sesStatusDescriptor) sesElement
 }
 
 func TestBuildSESEnclosureEdgeCases(t *testing.T) {
-	fanSpeed := 120
+	fanSpeed, amps, invalid := 120, 150, sesInvalidReading
 	a := sesPath{device: "sg9", revision: "0300", elements: []sesElement{
 		sesEl(sesTypePowerSupply, 0, "Critical", "PSU A", sesStatusDescriptor{ACFail: true, Fail: true}),
 		sesEl(sesTypeCooling, 0, "OK", "", sesStatusDescriptor{ActualFanSpeed: &fanSpeed}),
@@ -228,7 +228,8 @@ func TestBuildSESEnclosureEdgeCases(t *testing.T) {
 		sesEl(sesTypeDeviceSlot, 0, "OK", "", sesStatusDescriptor{FaultSensed: true}),
 		sesEl(sesTypeDeviceSlot, 1, "Not installed", "", sesStatusDescriptor{}),
 		sesEl(sesTypeTemperature, 0, "OK", "", sesStatusDescriptor{Temperature: &sesCode{I: 0}}),
-		sesEl(sesTypeCurrent, 0, "Unrecoverable", "", sesStatusDescriptor{CritOver: true}),
+		sesEl(sesTypeCurrent, 0, "Unrecoverable", "", sesStatusDescriptor{CritOver: true, Current: &sesReading{RawValue: &amps}}),
+		sesEl(sesTypeVoltage, 0, "Critical", "", sesStatusDescriptor{CritOver: true, Voltage: &sesReading{RawValue: &invalid}}),
 	}}
 	// A second path reports the fan as worse; worst status wins.
 	b := sesPath{device: "sg10", elements: []sesElement{
@@ -249,6 +250,9 @@ func TestBuildSESEnclosureEdgeCases(t *testing.T) {
 	if e.ID != "sg9" || e.Status != "Unrecoverable" {
 		t.Errorf("id=%q status=%q", e.ID, e.Status)
 	}
+	if e.VoltageSensors[0].Problem || e.VoltageSensors[0].Status != "Critical" || *e.CurrentSensors[0].Value != 1.5 {
+		t.Errorf("unexpected sensors: %+v %+v", e.VoltageSensors[0], e.CurrentSensors[0])
+	}
 	if *e.Fans[0].RPM != 1200 || !e.Fans[1].Problem || e.PowerSupplies[0].Description != "PSU A" ||
 		e.IOMs[0].Firmware != "0300" || !e.IOMs[0].HostVisible || e.IOMs[1].HostVisible || e.TemperatureSensors[0].Value != nil ||
 		e.Connectors[0].AttachedPhy != nil || e.Connectors[1].Installed || !e.SlotDetails[0].Problem || *e.SlotsPopulated != 1 {
@@ -261,7 +265,7 @@ func TestBuildSESEnclosureEdgeCases(t *testing.T) {
 	want := []string{
 		"power supply 0: Critical (AC fail, fail)",
 		"fan 1: OK (fail)",
-		"current sensor 0: Unrecoverable (over critical)",
+		"current sensor 0: Unrecoverable (1.5 A, over critical)",
 		"I/O module 1: Noncritical",
 		"connector 0: Critical (fail)",
 		"slot 0: OK (fault)",
