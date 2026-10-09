@@ -40,6 +40,7 @@ const tcpEstablished21 = tcpHeader +
 const tcp6Listen21 = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n" +
 	"   0: 00000000000000000000000000000000:0015 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 492036 1 000000009eb598a2 100 0 0 10 0\n"
 
+// TestInetdServiceEnabled checks which inetd.conf lines count as an active entry.
 func TestInetdServiceEnabled(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -63,6 +64,7 @@ func TestInetdServiceEnabled(t *testing.T) {
 	}
 }
 
+// TestTCPPortListening checks LISTEN detection in /proc/net/tcp and tcp6 tables.
 func TestTCPPortListening(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -91,6 +93,7 @@ func TestTCPPortListening(t *testing.T) {
 	}
 }
 
+// TestFTPServerListening checks the port 21 check reads both socket tables and skips unreadable ones.
 func TestFTPServerListening(t *testing.T) {
 	errMissing := errors.New("no such file")
 	tests := []struct {

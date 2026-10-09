@@ -478,6 +478,7 @@ func TestHandleServiceAction_WrongMethod(t *testing.T) {
 	}
 }
 
+// TestHandleServiceAction_FTPUnsupported checks that FTP actions get a 400 with guidance instead of a 500.
 func TestHandleServiceAction_FTPUnsupported(t *testing.T) {
 	server, _ := setupTestServer()
 

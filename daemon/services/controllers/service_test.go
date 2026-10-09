@@ -211,6 +211,7 @@ func TestGetServiceStatus_RcScriptOutput(t *testing.T) {
 	}
 }
 
+// TestGetServiceStatus_FTP checks FTP status comes from the port 21 listener, not an rc script.
 func TestGetServiceStatus_FTP(t *testing.T) {
 	const header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 	listening := header + "   1: 00000000:0015 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 52536051 1 0 100 0 0 10 0\n"
@@ -249,6 +250,7 @@ func TestGetServiceStatus_FTP(t *testing.T) {
 	}
 }
 
+// TestGetServiceStatus_FTPDefaultReader runs the FTP status check with the real file reader.
 func TestGetServiceStatus_FTPDefaultReader(t *testing.T) {
 	// Reads the real /proc/net/tcp tables (absent on macOS); only checks
 	// that no rc script is needed and no error is returned.
@@ -257,6 +259,7 @@ func TestGetServiceStatus_FTPDefaultReader(t *testing.T) {
 	}
 }
 
+// TestFTPActionsUnsupported checks FTP start/stop/restart return ErrServiceActionUnsupported.
 func TestFTPActionsUnsupported(t *testing.T) {
 	sc := NewServiceController()
 	for name, action := range map[string]func(string) error{

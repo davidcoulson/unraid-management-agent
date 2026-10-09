@@ -935,6 +935,7 @@ func TestSettingsCollector_UpdateStatus_OSUpdateComparison(t *testing.T) {
 	}
 }
 
+// TestSettingsCollector_NetworkServicesFTP checks FTP enabled/running come from inetd.conf and the port 21 listener.
 func TestSettingsCollector_NetworkServicesFTP(t *testing.T) {
 	const tcpHeader = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 	const listen21 = tcpHeader + "   1: 00000000:0015 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 52536051 1 0 100 0 0 10 0\n"
@@ -978,6 +979,7 @@ func TestSettingsCollector_NetworkServicesFTP(t *testing.T) {
 	}
 }
 
+// TestSettingsCollector_NetworkServicesDefaultReader runs the FTP check with the real file reader.
 func TestSettingsCollector_NetworkServicesDefaultReader(t *testing.T) {
 	// Reads the real /etc/inetd.conf and /proc/net/tcp tables (absent on
 	// macOS); only checks that the FTP entry is filled in without error.
