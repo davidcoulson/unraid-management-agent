@@ -18,6 +18,7 @@ func fakeStatus(command string) (string, error) {
 	return "not running", errors.New("exit status 1")
 }
 
+// TestListServiceStatuses_Order checks results come back in ValidServiceNames order with the right values.
 func TestListServiceStatuses_Order(t *testing.T) {
 	sc := &ServiceController{statusOutput: func(command string, _ ...string) (string, error) {
 		return fakeStatus(command)
@@ -38,6 +39,7 @@ func TestListServiceStatuses_Order(t *testing.T) {
 	}
 }
 
+// TestListServiceStatuses_RunsChecksConcurrently checks the status checks run concurrently, bounded by statusWorkers.
 func TestListServiceStatuses_RunsChecksConcurrently(t *testing.T) {
 	// Every check blocks until the test releases it. Reaching statusWorkers
 	// checks in flight at once is only possible if they run concurrently;

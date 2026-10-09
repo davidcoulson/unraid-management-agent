@@ -332,6 +332,7 @@ func TestExecCommandStdoutGuarded(t *testing.T) {
 	})
 }
 
+// TestExecCommandOutputWithTimeout checks output is returned for a command that finishes in time.
 func TestExecCommandOutputWithTimeout(t *testing.T) {
 	output, err := ExecCommandOutputWithTimeout(5*time.Second, "echo", "quick")
 	if err != nil {
@@ -342,6 +343,7 @@ func TestExecCommandOutputWithTimeout(t *testing.T) {
 	}
 }
 
+// TestExecCommandOutputWithTimeoutKillsSlowCommand checks a command is stopped at its timeout even when a child holds the output pipe.
 func TestExecCommandOutputWithTimeoutKillsSlowCommand(t *testing.T) {
 	// A shell whose child keeps the output pipe open: without WaitDelay the
 	// call would block until the child's 30 s sleep ends.
