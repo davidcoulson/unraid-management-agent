@@ -100,6 +100,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp; and `POST /plugins/{name}/update` accepts the name `GET /plugins`
   reports when it differs from the `.plg` file name (e.g. `disklocation` →
   `disklocation-master.plg`). ([#182](https://github.com/ruaan-deysel/unraid-management-agent/issues/182)).
+- **ZFS corrupted files never reported** — `parsePoolStatus` ended the `zpool status -v`
+  errors section at the blank line that OpenZFS prints after "Permanent errors have been
+  detected in the following files:", so `corrupted_files` was always empty and the alerting
+  `ZFSCorruptedFiles` total and MQTT corrupted files sensor were always 0. It now collects every
+  8-space-indented path after the header. ([#190](https://github.com/ruaan-deysel/unraid-management-agent/issues/190)).
 
 ## [2026.09.01] - 2026-09-28
 
