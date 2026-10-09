@@ -9143,7 +9143,19 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "status": {
-                    "$ref": "#/definitions/dto.NUTStatus"
+                    "description": "Status of the first device in Devices (the primary UPS), kept for\nclients that only know one device. It is also the first entry of\nStatuses when that device answered.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/dto.NUTStatus"
+                        }
+                    ]
+                },
+                "statuses": {
+                    "description": "Statuses has the detailed status of every device in Devices that\nanswered, in the same order (e.g. a second UPS or an ATS).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.NUTStatus"
+                    }
                 },
                 "timestamp": {
                     "type": "string"
@@ -11611,6 +11623,11 @@ const docTemplate = `{
                 "connected": {
                     "type": "boolean",
                     "example": true
+                },
+                "device_name": {
+                    "description": "NUT device name (upsc -l) when the data comes from NUT; empty for apcupsd.\nGET /nut lists every NUT device; this is the first one.",
+                    "type": "string",
+                    "example": "ups"
                 },
                 "load_percent": {
                     "description": "Load percentage; null when the UPS does not report it",

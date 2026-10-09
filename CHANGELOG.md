@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every NUT device, not only the first** — `GET /nut` and `nut_status_update` have a new
+  `statuses` list with the detailed status of every device `upsc -l` lists (a second UPS,
+  an ATS, a PDU …), in the same order. `status` stays the first device's, and `GET /ups`
+  stays the first NUT device (or apcupsd) and now says which one in `device_name`. A device
+  whose query fails is logged and left out. The NUT collector's command runner, `upsc`
+  lookup and file checks are injectable for tests.
+  ([#206](https://github.com/ruaan-deysel/unraid-management-agent/issues/206)).
 - **Automated PR governance checks** — added GitHub Actions workflow enforcing
   PR template completeness, exempting bots and draft PRs, stripping HTML comments
   during section validation, and validating issue references (supporting issue

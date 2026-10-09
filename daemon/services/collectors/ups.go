@@ -203,8 +203,9 @@ func (c *UPSCollector) collectNUT() (*dto.UPSStatus, error) {
 	}
 
 	status := &dto.UPSStatus{
-		Connected: true,
-		Timestamp: time.Now(),
+		Connected:  true,
+		DeviceName: devices[0],
+		Timestamp:  time.Now(),
 	}
 
 	lines := strings.SplitSeq(output, "\n")
