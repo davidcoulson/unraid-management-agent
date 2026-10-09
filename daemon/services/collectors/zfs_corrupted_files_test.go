@@ -1,9 +1,12 @@
 package collectors
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ruaan-deysel/unraid-management-agent/daemon/constants"
@@ -68,9 +71,10 @@ func TestParsePoolStatusCorruptedFiles(t *testing.T) {
 		{
 			name:   "no known data errors",
 			output: zpoolStatusNoErrors,
-			want:   nil,
+			want:   []string{},
 		},
 		{
+			// Only printed without -v; the file list is unknown, so it stays nil.
 			name:   "error count without a file list",
 			output: zpoolStatusNoErrors[:len(zpoolStatusNoErrors)-len("No known data errors\n")] + "2 data errors, use '-v' for a list\n",
 			want:   nil,
@@ -98,5 +102,42 @@ func TestParsePoolStatusCorruptedFiles(t *testing.T) {
 				t.Errorf("State = %q, VDEVs = %d; want ONLINE, 1", pool.State, len(pool.VDEVs))
 			}
 		})
+	}
+}
+
+// TestZFSPoolCorruptedFilesJSON checks that corrupted_files is always present
+// in the JSON that the REST API, websocket, MCP and MQTT send: [] for a healthy
+// pool, and null only when `zpool status` could not be read.
+func TestZFSPoolCorruptedFilesJSON(t *testing.T) {
+	c := &ZFSCollector{execOutput: func(string, ...string) (string, error) {
+		return zpoolStatusNoErrors, nil
+	}}
+	healthy := dto.ZFSPool{Name: "tank"}
+	if err := c.parsePoolStatus(&healthy); err != nil {
+		t.Fatalf("parsePoolStatus() error = %v", err)
+	}
+
+	c.execOutput = func(string, ...string) (string, error) {
+		return "", errors.New("zpool status failed")
+	}
+	failed := dto.ZFSPool{Name: "tank"}
+	if err := c.parsePoolStatus(&failed); err == nil {
+		t.Fatal("parsePoolStatus() error = nil, want the command error")
+	}
+
+	for _, tt := range []struct {
+		pool dto.ZFSPool
+		want string
+	}{
+		{healthy, `"corrupted_files":[]`},
+		{failed, `"corrupted_files":null`},
+	} {
+		data, err := json.Marshal(tt.pool)
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		if !strings.Contains(string(data), tt.want) {
+			t.Errorf("JSON %s does not contain %s", data, tt.want)
+		}
 	}
 }

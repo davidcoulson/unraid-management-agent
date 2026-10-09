@@ -296,6 +296,10 @@ func (c *ZFSCollector) parsePoolStatus(pool *dto.ZFSPool) error {
 			inConfig = false
 			summary := strings.TrimSpace(errSummary)
 			inErrors = summary != "" && !strings.Contains(summary, "No known data errors")
+			// zpool has printed its error log: report [] plus any paths that follow.
+			if !inErrors || strings.HasPrefix(summary, "Permanent errors") {
+				pool.CorruptedFiles = []string{}
+			}
 			continue
 		}
 

@@ -104,7 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors section at the blank line that OpenZFS prints after "Permanent errors have been
   detected in the following files:", so `corrupted_files` was always empty and the alerting
   `ZFSCorruptedFiles` total and MQTT corrupted files sensor were always 0. It now collects every
-  8-space-indented path after the header. ([#190](https://github.com/ruaan-deysel/unraid-management-agent/issues/190)).
+  8-space-indented path after the header. `corrupted_files` is also always present (no longer
+  `omitempty`): `[]` for a pool without permanent errors, so clients can tell "none" from "not
+  reported", and `null` only if `zpool status` could not be read. The MQTT sensor template counts
+  `null` or a missing field as 0. ([#190](https://github.com/ruaan-deysel/unraid-management-agent/issues/190)).
 
 ## [2026.09.01] - 2026-09-28
 
