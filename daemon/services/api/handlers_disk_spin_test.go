@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
 	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
 )
 
@@ -16,16 +15,13 @@ type spinCall struct {
 	up     bool
 }
 
-// stubDiskSpin replaces the emhttpd call for the duration of a test.
-func stubDiskSpin(t *testing.T, err error) *[]spinCall {
-	t.Helper()
+// stubDiskSpin replaces the emhttpd call on the server.
+func stubDiskSpin(server *Server, err error) *[]spinCall {
 	calls := &[]spinCall{}
-	original := diskSpin
-	diskSpin = func(_ *domain.Context, diskID string, up bool) error {
+	server.diskSpinFn = func(diskID string, up bool) error {
 		*calls = append(*calls, spinCall{diskID: diskID, up: up})
 		return err
 	}
-	t.Cleanup(func() { diskSpin = original })
 	return calls
 }
 
@@ -53,7 +49,7 @@ func diskSpinTestServer() *Server {
 
 func TestHandleDiskSpin_UpAndDownByID(t *testing.T) {
 	server := diskSpinTestServer()
-	calls := stubDiskSpin(t, nil)
+	calls := stubDiskSpin(server, nil)
 
 	code, resp := serveDiskSpin(t, server, "/api/v1/disks/disk1/spinup")
 	if code != http.StatusOK || !resp.Success {
@@ -72,7 +68,7 @@ func TestHandleDiskSpin_UpAndDownByID(t *testing.T) {
 
 func TestHandleDiskSpin_ResolvesDeviceToDiskID(t *testing.T) {
 	server := diskSpinTestServer()
-	calls := stubDiskSpin(t, nil)
+	calls := stubDiskSpin(server, nil)
 
 	code, _ := serveDiskSpin(t, server, "/api/v1/disks/sdb/spindown")
 
@@ -86,7 +82,7 @@ func TestHandleDiskSpin_ResolvesDeviceToDiskID(t *testing.T) {
 
 func TestHandleDiskSpin_UnknownDiskIsNotFound(t *testing.T) {
 	server := diskSpinTestServer()
-	calls := stubDiskSpin(t, nil)
+	calls := stubDiskSpin(server, nil)
 
 	code, resp := serveDiskSpin(t, server, "/api/v1/disks/disk99/spinup")
 
@@ -100,7 +96,7 @@ func TestHandleDiskSpin_UnknownDiskIsNotFound(t *testing.T) {
 
 func TestHandleDiskSpin_ControllerError(t *testing.T) {
 	server := diskSpinTestServer()
-	stubDiskSpin(t, errors.New("emhttpd unavailable"))
+	stubDiskSpin(server, errors.New("emhttpd unavailable"))
 
 	code, resp := serveDiskSpin(t, server, "/api/v1/disks/disk1/spindown")
 
@@ -112,10 +108,11 @@ func TestHandleDiskSpin_ControllerError(t *testing.T) {
 func TestDiskSpinDefault_FailsOffUnraid(t *testing.T) {
 	// Without the emhttpd socket or /proc/mdcmd the real controller must
 	// report an error rather than pretend the disk was spun.
-	if err := diskSpin(&domain.Context{}, "disk1", true); err == nil {
+	server, _ := setupTestServer()
+	if err := server.spinDisk("disk1", true); err == nil {
 		t.Error("spin up: expected an error outside Unraid")
 	}
-	if err := diskSpin(&domain.Context{}, "disk1", false); err == nil {
+	if err := server.spinDisk("disk1", false); err == nil {
 		t.Error("spin down: expected an error outside Unraid")
 	}
 }

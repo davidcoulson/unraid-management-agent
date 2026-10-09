@@ -72,6 +72,9 @@ type Server struct {
 	agentSvc         *agent.Service
 	toolPolicyStore  *domain.ToolPolicyStore
 
+	// diskSpinFn replaces the array controller's spin calls in tests.
+	diskSpinFn func(diskID string, up bool) error
+
 	// Embedded cache store for lock-free atomic access to collector data
 	*CacheStore
 }

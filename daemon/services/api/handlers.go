@@ -1174,10 +1174,13 @@ func (s *Server) handleClearDiskStats(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// diskSpin spins a disk up (up=true) or down. It is a variable so tests can
-// replace the emhttpd call.
-var diskSpin = func(ctx *domain.Context, diskID string, up bool) error {
-	ctrl := controllers.NewArrayController(ctx)
+// spinDisk spins a disk up (up=true) or down via the array controller, or via
+// s.diskSpinFn when a test has set one.
+func (s *Server) spinDisk(diskID string, up bool) error {
+	if s.diskSpinFn != nil {
+		return s.diskSpinFn(diskID, up)
+	}
+	ctrl := controllers.NewArrayController(s.ctx)
 	if up {
 		return ctrl.SpinUpDisk(diskID)
 	}
@@ -1242,7 +1245,7 @@ func (s *Server) handleDiskSpin(w http.ResponseWriter, r *http.Request, up bool)
 	}
 
 	logger.Info("API: Spin %s requested for disk %s", action, diskID)
-	if err := diskSpin(s.ctx, diskID, up); err != nil {
+	if err := s.spinDisk(diskID, up); err != nil {
 		logger.Error("API: Failed to spin %s disk %s: %v", action, diskID, err)
 		respondJSON(w, http.StatusInternalServerError, dto.Response{
 			Success:   false,
