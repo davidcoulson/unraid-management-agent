@@ -402,6 +402,11 @@ func TestEngineBuildEnvUPSMissingReadings(t *testing.T) {
 	if results := eval.Evaluate(env, rules); len(results) != 0 {
 		t.Errorf("Evaluate() fired %v with unknown readings, want nothing", results)
 	}
+	// The failing unguarded rule remembers its error, so it is logged once.
+	if eval.states["runtime-low"].lastEvalError == "" {
+		t.Error("runtime-low lastEvalError is empty after a nil comparison")
+	}
+	eval.Evaluate(env, rules)
 
 	// Once the UPS reports the value, the same rules work as before.
 	env.UPSRuntimeLeft = new(120.0)
@@ -413,5 +418,18 @@ func TestEngineBuildEnvUPSMissingReadings(t *testing.T) {
 	}
 	if !fired["runtime-low"] || !fired["load-guarded"] || fired["nut-load"] || fired["battery-low"] {
 		t.Errorf("fired = %v, want runtime-low and load-guarded only", fired)
+	}
+	if eval.states["runtime-low"].lastEvalError != "" {
+		t.Error("runtime-low lastEvalError not cleared after a successful evaluation")
+	}
+
+	// The reading becomes unknown again: the firing rule keeps its state
+	// instead of resolving on a value nobody measured.
+	env.UPSRuntimeLeft = nil
+	if results := eval.Evaluate(env, rules); len(results) != 0 {
+		t.Errorf("Evaluate() transitions %v after the reading went unknown, want none", results)
+	}
+	if got := eval.states["runtime-low"].state; got != "firing" {
+		t.Errorf("runtime-low state = %q, want firing", got)
 	}
 }

@@ -95,6 +95,8 @@ func TestParseOptionalInt(t *testing.T) {
 		{"-1", new(-1)},
 		{"", nil},
 		{"unknown", nil},
+		{"1e100", nil},
+		{"-1e100", nil},
 	}
 	for _, tt := range tests {
 		got := parseOptionalInt(tt.in)
@@ -172,6 +174,7 @@ func TestUPSCollectorNUTPower(t *testing.T) {
 		{"derived from nominal and load", "ups.load: 13\nups.realpower.nominal: 800\n", new(104.0)},
 		{"zero load with nominal is 0 W", "ups.load: 0\nups.realpower.nominal: 800\n", new(0.0)},
 		{"load without nominal is unknown", "ups.load: 13\n", nil},
+		{"VA rating is not a watt rating", "ups.load: 50\nups.power.nominal: 1500\n", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,6 +244,11 @@ MODEL    : Back-UPS RS 1500G
 
 	// A UPS that reports neither load nor nominal power.
 	sparse := "STATUS   : ONLINE\nBCHARGE  : 97.0 Percent\nTIMELEFT : n/a\n"
+	// An absurd TIMELEFT that overflows int once converted to seconds is unknown.
+	c = &UPSCollector{execOutput: fakeExec(map[string]string{"apcaccess": "TIMELEFT : 1e300 Minutes\n"})}
+	if status, err = c.collectAPC(); err != nil || status.RuntimeLeft != nil {
+		t.Errorf("collectAPC() overflowing TIMELEFT = %v, %v; want nil runtime", status.RuntimeLeft, err)
+	}
 	c = &UPSCollector{execOutput: fakeExec(map[string]string{"apcaccess": sparse})}
 	status, err = c.collectAPC()
 	if err != nil {

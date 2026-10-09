@@ -78,8 +78,10 @@ type AlertEnv struct {
 	UPSStatus                 string  `expr:"UPSStatus"`
 	// UPS and NUT readings are nil when there is no UPS or it does not report
 	// the value. Guard them in expressions, e.g.
-	// "UPSLoadPercent != nil && UPSLoadPercent > 80". An unguarded comparison with nil fails to evaluate, so the rule is
-	// skipped for that cycle instead of firing on a fabricated 0.
+	// "UPSLoadPercent != nil && UPSLoadPercent > 80". An unguarded comparison
+	// with nil fails to evaluate: the rule never fires on a fabricated 0, keeps
+	// its current state (a firing rule stays firing) and logs one warning until
+	// the reading is known again.
 	UPSBatteryCharge *float64 `expr:"UPSBatteryCharge"`
 	UPSLoadPercent   *float64 `expr:"UPSLoadPercent"`
 	UPSRuntimeLeft   *float64 `expr:"UPSRuntimeLeft"`

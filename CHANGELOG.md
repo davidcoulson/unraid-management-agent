@@ -51,11 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are now nullable and serialised as `null` when apcupsd/NUT does not report the variable
   (many UPSes have no `ups.load` or `ups.realpower`). Power is estimated from nominal × load
   only when both are reported, and the UPS collector's NUT path now uses `ups.realpower`
-  when present. MQTT discovery templates publish `None` (unknown) instead of 0, Prometheus
+  when present and no longer takes `ups.power.nominal` (VA) as the watt rating. MQTT discovery templates publish `None` (unknown) instead of 0, Prometheus
   leaves out UPS gauges for unreported readings, and the alert variables `UPSBatteryCharge`,
   `UPSLoadPercent`, `UPSRuntimeLeft`, `NUTBatteryCharge`, `NUTBatteryRuntime` and
   `NUTLoadPercent` are nil when unknown, so rules never fire on a fabricated 0 (guard them,
-  e.g. `UPSLoadPercent != nil && UPSLoadPercent > 80`).
+  e.g. `UPSLoadPercent != nil && UPSLoadPercent > 80`). A rule that fails to evaluate keeps
+  its state and is logged once until it evaluates again, instead of on every cycle.
   ([#204](https://github.com/ruaan-deysel/unraid-management-agent/issues/204)).
 - **FTP status and actions on Unraid 7** — Unraid starts vsftpd from inetd, but `/services`
   checked a non-existent `/etc/rc.d/rc.proftpd` (always stopped, actions failed with an

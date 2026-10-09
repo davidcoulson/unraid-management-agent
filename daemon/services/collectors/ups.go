@@ -146,7 +146,7 @@ func (c *UPSCollector) collectAPC() (*dto.UPSStatus, error) {
 				value = strings.TrimSuffix(value, " Minutes")
 			}
 			if minutes := parseOptionalFloat(value); minutes != nil {
-				status.RuntimeLeft = new(int(*minutes * 60)) // Convert minutes to seconds
+				status.RuntimeLeft = optionalInt(*minutes * 60) // Convert minutes to seconds
 			}
 		case "NOMPOWER":
 			// Parse nominal power (e.g., "800 Watts")
@@ -233,8 +233,9 @@ func (c *UPSCollector) collectNUT() (*dto.UPSStatus, error) {
 			status.RuntimeLeft = parseOptionalInt(value) // Already in seconds
 		case "ups.realpower":
 			status.PowerWatts = parseOptionalFloat(value)
-		case "ups.power.nominal", "ups.realpower.nominal":
-			// Parse nominal power (usually in Watts)
+		case "ups.realpower.nominal":
+			// Nominal real power in watts. ups.power.nominal is in VA, so it
+			// is not used: VA × load would overstate the power draw.
 			status.NominalPower = parseOptionalFloat(value)
 		case "input.voltage":
 			// InputVoltage field not in DTO, parsing for potential future use
@@ -275,7 +276,16 @@ func parseOptionalInt(value string) *int {
 	if v == nil {
 		return nil
 	}
-	return new(int(*v))
+	return optionalInt(*v)
+}
+
+// optionalInt converts a finite reading to an int, or nil when it is outside
+// the int range (Go's conversion of such a value is implementation-defined).
+func optionalInt(v float64) *int {
+	if v < math.MinInt64 || v >= math.MaxInt64 {
+		return nil
+	}
+	return new(int(v))
 }
 
 // derivePower estimates power as nominal × load%. It returns nil unless both
