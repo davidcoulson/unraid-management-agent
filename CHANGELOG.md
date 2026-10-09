@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GitHub issue template configuration** — added `.github/ISSUE_TEMPLATE/config.yml`
   with private security disclosure contact links.
 
+### Fixed
+
+- **CI coverage test on Linux** — allowed HTTP 200 in `TestLogFileEndpoint` when `/var/log/syslog` exists on Linux runners, unblocking coverage profile generation.
+- **Codecov PR comments** — configured `.codecov.yml` with `require_changes: false` so coverage reports are posted on all pull requests.
+
 ### Changed
 
 - **GitHub Actions Ubuntu runner policy** — set release workflow jobs to
@@ -49,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Temperature metric filtering from lm-sensors** — `parseSensorsOutput` now reports only
   `temp*_input` channels, excluding voltage/current/power/fan `_input` metrics that were
   previously misreported as Celsius temperatures. ([#177](https://github.com/ruaan-deysel/unraid-management-agent/pull/177)).
+- **False "Array not started" findings** ([#180](https://github.com/ruaan-deysel/unraid-management-agent/issues/180)) —
+  the health report and the MCP `find_root_cause` tool compared the array state
+  with "Started", but Unraid reports `mdState` as "STARTED", so a running array
+  was always flagged critical. Added a case-insensitive `ArrayStatus.IsStarted()`,
+  used by the health report, `find_root_cause` and the Prometheus metrics.
+- **Disk spin up/down REST endpoints** ([#178](https://github.com/ruaan-deysel/unraid-management-agent/issues/178)) —
+  added `POST /api/v1/disks/{id}/spinup` and `POST /api/v1/disks/{id}/spindown`,
+  which the Home Assistant integration's disk spin switches already call (they got
+  404). `{id}` may be the disk id, device or name; it is resolved against the disk
+  collector cache, so unknown disks return 404, and the existing array controller
+  spins the disk via emhttpd.
 
 ## [2026.09.01] - 2026-09-28
 
