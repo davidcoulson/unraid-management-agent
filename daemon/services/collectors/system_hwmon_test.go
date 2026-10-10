@@ -85,6 +85,17 @@ func TestHwmonChipDeviceIDs(t *testing.T) {
 			want: map[string]string{"octo-hid-3-13": "07274-50017"},
 		},
 		{
+			name: "HID id wider than four digits after many HID registrations",
+			entries: []fakeHwmon{{
+				hwmon:  "hwmon7",
+				name:   "octo",
+				devRel: usbPort + "/3-6.1:1.0/0003:0C70:F011.10000",
+				usbRel: usbPort,
+				usb:    map[string]string{"idVendor": "0c70", "serial": "07274-50017", "busnum": "3", "devpath": "6.1"},
+			}},
+			want: map[string]string{"octo-hid-3-10000": "07274-50017"},
+		},
+		{
 			name: "HID chip without serial uses the USB port path",
 			entries: []fakeHwmon{{
 				hwmon:  "hwmon6",

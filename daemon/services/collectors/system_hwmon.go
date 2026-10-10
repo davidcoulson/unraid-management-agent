@@ -13,8 +13,10 @@ import (
 const defaultSysfsRoot = "/sys"
 
 // hidDeviceNameRe matches a HID device directory name, e.g. "0003:0C70:F011.0013"
-// (bus type : vendor : product . id, all hexadecimal).
-var hidDeviceNameRe = regexp.MustCompile(`^([0-9A-Fa-f]{4}):[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}\.([0-9A-Fa-f]{4})$`)
+// (bus type : vendor : product . id, all hexadecimal). The kernel prints the id
+// with "%04X", a minimum width: its global counter grows past 0xFFFF on a host
+// that has registered many HID devices ("0003:0C70:F011.10000").
+var hidDeviceNameRe = regexp.MustCompile(`^([0-9A-Fa-f]{4}):[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}\.([0-9A-Fa-f]{4,8})$`)
 
 // maxUSBParentDepth bounds the walk from a HID device up to its USB device.
 const maxUSBParentDepth = 8
@@ -73,7 +75,7 @@ func hidHwmonChip(hwmonDir string) (chip, devDir string, ok bool) {
 	if err != nil {
 		return "", "", false
 	}
-	id, err := strconv.ParseUint(m[2], 16, 16)
+	id, err := strconv.ParseUint(m[2], 16, 32)
 	if err != nil {
 		return "", "", false
 	}
