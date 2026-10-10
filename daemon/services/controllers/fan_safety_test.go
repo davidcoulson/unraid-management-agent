@@ -59,3 +59,65 @@ func TestDetectFailuresReturnsAllFailedEachCall(t *testing.T) {
 		}
 	}
 }
+
+func TestValidatePWM(t *testing.T) {
+	g := NewFanSafetyGuard(nil, dto.FanSafetyConfig{MinSpeedPercent: 20})
+
+	tests := []struct {
+		name string
+		pct  int
+		want int
+	}{
+		{"below minimum clamps up", 10, 20},
+		{"far below minimum clamps up", -50, 20},
+		{"exactly at minimum", 20, 20},
+		{"above minimum unchanged", 55, 55},
+		{"max unchanged", 100, 100},
+		{"above 100 unchanged (no upper clamp here)", 150, 150},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := g.ValidatePWM(tt.pct); got != tt.want {
+				t.Errorf("ValidatePWM(%d) = %d, want %d", tt.pct, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidatePWMDefaultMinimum(t *testing.T) {
+	// A zero MinSpeedPercent is normalized to DefaultMinSpeedPercent by the constructor.
+	g := NewFanSafetyGuard(nil, dto.FanSafetyConfig{})
+	if got := g.ValidatePWM(0); got != DefaultMinSpeedPercent {
+		t.Errorf("ValidatePWM(0) = %d, want default %d", got, DefaultMinSpeedPercent)
+	}
+	if got := g.Config().MinSpeedPercent; got != DefaultMinSpeedPercent {
+		t.Errorf("Config().MinSpeedPercent = %d, want %d", got, DefaultMinSpeedPercent)
+	}
+}
+
+func TestCheckTemperatureSafety(t *testing.T) {
+	tests := []struct {
+		name     string
+		temp     float64
+		critical float64
+		want     bool
+	}{
+		{"below critical", 65.0, 90.0, false},
+		{"equal to critical", 90.0, 90.0, true},
+		{"above critical", 95.5, 90.0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewFanSafetyGuard(nil, dto.FanSafetyConfig{
+				CriticalTempC: tt.critical,
+			})
+			g.readMaxTemp = func() float64 {
+				return tt.temp
+			}
+			if got := g.CheckTemperatureSafety(); got != tt.want {
+				t.Errorf("CheckTemperatureSafety() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

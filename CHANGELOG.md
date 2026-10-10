@@ -23,6 +23,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no trailing newline, redaction) and ZIP archive error paths (failing writer,
   unsupported JSON values, nonexistent output directory, partial-file removal and
   empty-log omission). ([#192](https://github.com/ruaan-deysel/unraid-management-agent/issues/192)).
+- **Coverage uplift part 2 (issue #192)** — added further host-safe unit tests
+  covering pure functions. `daemon/domain` rose to ~88% (from ~58%) via tests for
+  the tool-policy store (`IsValidTool`, `GetAll`, `GetCatalog`, `CategorizeMCPTool`),
+  the typed event bus (`Topic.TopicName`, `EventBus.SubTopics`) and file-config
+  loading (`LoadConfigFile` happy/missing/malformed paths, `DefaultDiscoveryConfig`).
+  Added `daemon/services/controllers` tests for the pure fan-safety PWM clamp
+  (`ValidatePWM` boundaries and default-minimum normalization), fan-curve
+  interpolation (`interpolateSpeed` below/above/midpoint and the duplicate
+  lowest-boundary clamp),
+  and the Docker/IPMI string helpers (`shortDigest`, `sanitizeFanName`).
+  ([#192](https://github.com/ruaan-deysel/unraid-management-agent/issues/192)).
+- **Coverage uplift part 3 (issue #192)** — extracted the `/proc/net/dev` and
+  `disks.ini` parsers in `daemon/services/collectors` into pure,
+  `io.Reader`-based helpers (`parseNetDevStats`, `parseDisksINIFrom`) with the
+  existing collector methods kept as thin file-opening wrappers, then added
+  table-driven fixture tests covering multi-record parsing, header skipping,
+  malformed/short rows, non-numeric counters, content before the first section,
+  and final-section capture. No collector behavior changed.
+  ([#192](https://github.com/ruaan-deysel/unraid-management-agent/issues/192)).
+- **Coverage uplift part 4 (issue #192)** — extracted the `nvidia-smi` CSV
+  parsing in `daemon/services/collectors/gpu.go` into a pure
+  `parseNvidiaGPUCSV` helper (collector keeps querying the driver version),
+  with table-driven tests for single/multiple GPUs, short records, non-numeric
+  and `N/A` fields, zero total memory, and MiB-to-byte conversion. Also added
+  `daemon/lib` tests for `ExecCommandOutputWithContext` (success, pre-cancelled
+  context, nonexistent binary). No collector behavior changed.
+  ([#192](https://github.com/ruaan-deysel/unraid-management-agent/issues/192)).
+- **Coverage uplift part 5 (issue #192)** — extracted the `network.cfg` and
+  `ident.cfg` parsing in `daemon/services/collectors/config.go` into pure
+  `io.Reader`-based helpers (`parseNetworkConfig`, `parseSystemSettings`) and
+  made the boot config directory injectable so the `GetNetworkConfig` and
+  `GetSystemSettings` wrappers are unit-testable. Added tests for interface
+  section matching, bond/bridge/VLAN parsing, missing-interface and
+  missing-file errors, and system settings fields. No collector behavior
+  changed. ([#192](https://github.com/ruaan-deysel/unraid-management-agent/issues/192)).
+- **Coverage uplift part 6 (issue #192)** — extracted the remaining
+  `daemon/services/collectors/config.go` settings parsers (`docker.cfg`,
+  `domain.cfg`, `disk.cfg`) into pure `io.Reader` helpers
+  (`parseDockerSettings`, `parseVMSettings`, `parseDiskSettings`) routed
+  through the injectable boot config directory, with tests covering field
+  parsing, device/network list splitting, the disabled-default fallback when
+  `docker.cfg`/`domain.cfg` are absent, and the required-file error for
+  `disk.cfg`. No collector behavior changed.
+  ([#192](https://github.com/ruaan-deysel/unraid-management-agent/issues/192)).
+- **Coverage uplift phases 1–5 completion (issue #192)** — completed all five phases
+  from the test coverage plan:
+  - *Phase 1 (Reporting Alignment)*: aligned `Makefile` `test-coverage` target
+    (`-covermode=atomic`, filtering out `daemon/docs` and `tests`), documented line
+    vs statement coverage in `docs/development/code-quality.md`, and gated host-dependent
+    Docker SDK and `virt-clone` tests with `//go:build integration`.
+  - *Phase 2 (Collectors & Device Parsing)*: extracted pure parsing functions in
+    `ups.go` (`parseAPCOutput`, `parseNUTUpscOutput`), `nut.go` (`parseNUTConfig`,
+    `parseNUTStatusOutput`), and `zfs.go` (`parseZPoolListOutput`, `parseZPoolStatusOutput`,
+    `parseZFSDatasetListOutput`, `parseZFSSnapshotListOutput`), adding thorough table-driven
+    unit tests for pool states, vdev trees, and datasets.
+  - *Phase 3 (Controllers & Execution Seams)*: added injected execution seams and unit
+    tests for `array.go` (start/stop, parity checks, spin modes), `service.go` (start/stop/restart),
+    `vm.go` (`pmWakeup`, snapshot lists, clone), `guard.go` (`binaryExists`), and
+    `fan_safety.go` (temperature probes and PWM safety bounds).
+  - *Phase 4 (Deterministic Lifecycle & Subscriptions)*: eliminated arbitrary `time.Sleep`
+    calls in `collector_manager_test.go` and `subscribe_events_test.go` using channel waits,
+    bounded polling helpers, and `WSHub.ClientCount()`; refactored `Orchestrator.Run` with
+    an isolated, tested `shutdown()` helper.
+  - *Phase 5 (Logger & Diagnostics)*: added log capture tests in `logger_test.go`,
+    injected bundle/archive seams with comprehensive unit tests for `handleDiagnosticsBundle`
+    in `diagnostics_test.go`, and documented redacted ZIP vs unredacted shell diagnostics in
+    `docs/troubleshooting/diagnostics.md` and `docs/api/diagnostics.md`.
+  ([#192](https://github.com/ruaan-deysel/unraid-management-agent/issues/192)).
 
 ### Added
 
@@ -33,6 +101,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose query fails is logged and left out. The NUT collector's command runner, `upsc`
   lookup and file checks are injectable for tests.
   ([#206](https://github.com/ruaan-deysel/unraid-management-agent/issues/206)).
+- **Mandatory pre-submission governance for pull requests** — added a required
+  "Pre-Submission Governance" section to the PR template with mandatory
+  confirmation checkboxes (built and ran locally, `make test` passes,
+  `make pre-commit-run` passes, real verification output pasted, not a duplicate
+  or back-to-back spam PR, and human sign-off for AI-assisted PRs). The PR
+  Governance workflow now fails any PR that leaves these boxes unchecked, and
+  `CONTRIBUTING.md` documents the enforced rules. These apply to all authors,
+  including AI agents and automation.
+- **CI runner spam protection** — added a `concurrency` group with
+  `cancel-in-progress` to the PR Governance workflow and gated the Coverage
+  workflow to skip draft PRs, so rapid back-to-back pushes cancel superseded
+  runs instead of piling up and exhausting CI runners.
+- **Enforced GitHub issue forms for triage quality** — replaced legacy markdown
+  issue templates with structured GitHub Issue Forms (`01-bug-report.yml` and
+  `02-enhancement-request.yml`) based on the `vault` repository setup, with
+  required fields and required confirmations to read `CONTRIBUTING.md` and
+  `AGENTS.md`. Updated `.github/ISSUE_TEMPLATE/config.yml` contact links for
+  Discussions, private security disclosure, and contribution rules.
 - **Automated PR governance checks** — added GitHub Actions workflow enforcing
   PR template completeness, exempting bots and draft PRs, stripping HTML comments
   during section validation, and validating issue references (supporting issue
@@ -50,6 +136,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `J nolog`, never twice at once, with timeouts; works with sg_ses alone (plain HBAs)
   and is a no-op (`state: "unsupported"`) without either tool.
   ([#184](https://github.com/ruaan-deysel/unraid-management-agent/issues/184)).
+- **Storage topology throughput and link utilization** — `GET /api/v1/storage/topology`
+  controllers and enclosures now carry a `throughput` object (`read_bytes_per_sec`,
+  `write_bytes_per_sec`, `total_bytes_per_sec`, `capacity_bytes_per_sec`,
+  `utilization_percent`, `drives`, `interval_seconds`). Rates are the sector deltas of
+  each drive's block device in `/proc/diskstats` between two collections (kernel
+  counters only, nothing is sent to the drives); counter resets count as zero and the
+  object is omitted on the first collection. Capacity is the SAS payload rate of the
+  links (8b/10b: link rate in Gbps x 100 MB/s per lane): the controller's connected
+  phys, and for an enclosure the controller ports cabled directly to it (0, with no
+  `utilization_percent`, for an enclosure only reached through another enclosure).
 
 ### Fixed
 

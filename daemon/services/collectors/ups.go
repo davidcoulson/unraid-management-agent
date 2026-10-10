@@ -107,7 +107,11 @@ func (c *UPSCollector) collectAPC() (*dto.UPSStatus, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseAPCOutput(output)
+}
 
+// parseAPCOutput parses the stdout of apcaccess into a UPSStatus DTO.
+func parseAPCOutput(output string) (*dto.UPSStatus, error) {
 	status := &dto.UPSStatus{
 		Connected: true,
 		Timestamp: time.Now(),
@@ -202,10 +206,19 @@ func (c *UPSCollector) collectNUT() (*dto.UPSStatus, error) {
 		return nil, err
 	}
 
+	status, err := parseNUTUpscOutput(output)
+	if err != nil {
+		return nil, err
+	}
+	status.DeviceName = devices[0]
+	return status, nil
+}
+
+// parseNUTUpscOutput parses the stdout of upsc into a UPSStatus DTO.
+func parseNUTUpscOutput(output string) (*dto.UPSStatus, error) {
 	status := &dto.UPSStatus{
-		Connected:  true,
-		DeviceName: devices[0],
-		Timestamp:  time.Now(),
+		Connected: true,
+		Timestamp: time.Now(),
 	}
 
 	lines := strings.SplitSeq(output, "\n")
