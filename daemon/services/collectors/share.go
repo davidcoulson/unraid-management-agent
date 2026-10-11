@@ -19,6 +19,10 @@ import (
 // It gathers share configuration, usage statistics, and disk allocation details.
 type ShareCollector struct {
 	ctx *domain.Context
+
+	// paths locates /mnt, var.ini and disks.ini for the exclusive share
+	// check; the zero value uses the production paths.
+	paths exclusivePaths
 }
 
 // NewShareCollector creates a new user share collector with the given context.
@@ -281,6 +285,7 @@ func (c *ShareCollector) collectShares(ctx context.Context) ([]dto.ShareInfo, er
 	for i := range shares {
 		c.enrichShareWithConfig(&shares[i], configCollector)
 	}
+	c.paths.applyExclusiveState(shares)
 
 	logger.Debug("Share: Parsed %d shares successfully", len(shares))
 	return shares, nil
