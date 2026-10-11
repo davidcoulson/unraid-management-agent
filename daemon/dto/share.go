@@ -33,14 +33,16 @@ type ShareInfo struct {
 	Exclusive *bool `json:"exclusive,omitempty" example:"true"`
 	// ExclusiveEligible is true when exclusive shares are enabled globally and
 	// the share lives on a single pool (primary pool only, no secondary storage;
-	// before Unraid 7.2 also not exported over NFS).
+	// before Unraid 7.2 also not exported over NFS). Omitted when that NFS
+	// rule applies but the share's config cannot be read.
 	ExclusiveEligible *bool `json:"exclusive_eligible,omitempty" example:"true"`
 	// ExclusivePool is the pool the share's symlink points at when exclusive.
 	ExclusivePool string `json:"exclusive_pool,omitempty" example:"cache"`
 	// Locations lists the pools and array disks holding a top-level folder for
-	// the share. Reported only when the share is eligible but not exclusive:
-	// any entry other than the share's pool is what keeps it on FUSE.
-	Locations []string `json:"locations,omitempty" example:"cache,disk1"`
+	// the share. Reported only when the share is eligible but not exclusive
+	// (an empty list when none was found): any entry other than the share's
+	// pool is what keeps it on FUSE.
+	Locations *[]string `json:"locations,omitempty" swaggertype:"array,string" example:"cache,disk1"`
 	// LocationsUnchecked lists the disks and pools that were not checked for a
 	// folder because a device is spun down, its spin state is unknown or the
 	// check failed, so they are never woken. Reported alongside Locations;

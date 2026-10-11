@@ -10472,7 +10472,7 @@ const docTemplate = `{
                     "example": true
                 },
                 "exclusive_eligible": {
-                    "description": "ExclusiveEligible is true when exclusive shares are enabled globally and\nthe share lives on a single pool (primary pool only, no secondary storage;\nbefore Unraid 7.2 also not exported over NFS).",
+                    "description": "ExclusiveEligible is true when exclusive shares are enabled globally and\nthe share lives on a single pool (primary pool only, no secondary storage;\nbefore Unraid 7.2 also not exported over NFS). Omitted when that NFS\nrule applies but the share's config cannot be read.",
                     "type": "boolean",
                     "example": true
                 },
@@ -10486,7 +10486,7 @@ const docTemplate = `{
                     "example": 5368709120000
                 },
                 "locations": {
-                    "description": "Locations lists the pools and array disks holding a top-level folder for\nthe share. Reported only when the share is eligible but not exclusive:\nany entry other than the share's pool is what keeps it on FUSE.",
+                    "description": "Locations lists the pools and array disks holding a top-level folder for\nthe share. Reported only when the share is eligible but not exclusive\n(an empty list when none was found): any entry other than the share's\npool is what keeps it on FUSE.",
                     "type": "array",
                     "items": {
                         "type": "string"
