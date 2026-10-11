@@ -363,8 +363,8 @@ func (c *NICCollector) discoverTemperatures(functions map[string]string) []dto.N
 				t.Label = filepath.Base(prefix)
 			}
 			t.Sensor = classifyNICSensor(label, len(inputs) == 1)
-			if t.Sensor == dto.NICSensorModule {
-				t.Interface = ifname
+			if t.Sensor != dto.NICSensorASIC {
+				t.Interface = ifname // per-port sensor: name its port
 			}
 			temps = append(temps, t)
 		}
@@ -396,9 +396,11 @@ var nicSensorOrder = map[string]int{
 	dto.NICSensorASIC: 0, dto.NICSensorPHY: 1, dto.NICSensorMAC: 2, dto.NICSensorOther: 3, dto.NICSensorModule: 4,
 }
 
-// cardTemperatures returns the temperatures of a card's functions. A sensor
-// every function of a multi-function card exposes (the shared ASIC) is
-// reported once, with the highest reading; module sensors are per port.
+// cardTemperatures returns the temperatures of a card's functions. The ASIC
+// sensor every function of a multi-function card exposes is the one shared
+// die (functions in one PCI slot are one chip), so it is reported once, with
+// the highest reading. Every other sensor (PHY, MAC, module, ...) can be per
+// port, so it is kept per PCI function even when labels repeat.
 func cardTemperatures(temps []dto.NICTemperature, ports []nicPortInfo) []dto.NICTemperature {
 	inCard := map[string]bool{}
 	for _, p := range ports {
@@ -410,17 +412,17 @@ func cardTemperatures(temps []dto.NICTemperature, ports []nicPortInfo) []dto.NIC
 		if !inCard[t.PCIAddress] {
 			continue
 		}
-		key := t.Sensor + "\x00" + t.Label
-		if t.Sensor == dto.NICSensorModule {
-			key += "\x00" + t.PCIAddress
+		if t.Sensor != dto.NICSensorASIC {
+			out = append(out, t)
+			continue
 		}
-		if i, ok := index[key]; ok {
+		if i, ok := index[t.Label]; ok {
 			if t.Celsius > out[i].Celsius {
 				out[i] = t
 			}
 			continue
 		}
-		index[key] = len(out)
+		index[t.Label] = len(out)
 		out = append(out, t)
 	}
 	sort.SliceStable(out, func(i, j int) bool {

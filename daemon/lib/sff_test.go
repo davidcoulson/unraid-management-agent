@@ -472,3 +472,45 @@ func TestMwToDBm(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeDataNotReady(t *testing.T) {
+	qsfp := loadQSFPFixture(t, "qsfp28_aoc_port0.bin")
+	qsfp[2] |= 0x01 // Data_Not_Ready
+	qsfp[6] = 0x80
+	m := DecodeModuleEEPROM(ModuleTypeSFF8636, qsfp)
+	if !m.DataNotReady || !m.DDMSupported || m.VendorPN != "QSFP-100G-AOC-3M" {
+		t.Errorf("not-ready QSFP: %+v", m)
+	}
+	if m.TemperatureCelsius != nil || m.Lanes != nil || len(m.Alarms) != 0 || m.Thresholds != nil {
+		t.Errorf("not-ready QSFP reports monitors: %+v", m)
+	}
+
+	sfp := sfpEEPROM()
+	sfp[256+110] = 0x01 // Data_Ready_Bar
+	m = DecodeModuleEEPROM(ModuleTypeSFF8472, sfp)
+	if !m.DataNotReady || m.TemperatureCelsius != nil || m.Lanes != nil || len(m.Alarms) != 0 || m.Thresholds != nil {
+		t.Errorf("not-ready SFP: %+v", m)
+	}
+}
+
+func TestDecodeSFF8472InvalidCalibration(t *testing.T) {
+	for name, bits := range map[string]uint32{
+		"NaN":  0x7fc00000,
+		"+Inf": 0x7f800000,
+		"-Inf": 0xff800000,
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := sfpEEPROM()
+			b[92] = 0x50 // externally calibrated
+			binary.BigEndian.PutUint32(b[256+64:], bits)
+			m := DecodeModuleEEPROM(ModuleTypeSFF8472, b)
+			if m.Error == "" || m.TemperatureCelsius != nil || m.Lanes != nil {
+				t.Errorf("module = %+v", m)
+			}
+			// The module (and so the whole card list) still serialises.
+			if _, err := json.Marshal(m); err != nil {
+				t.Errorf("marshal: %v", err)
+			}
+		})
+	}
+}

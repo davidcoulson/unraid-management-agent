@@ -276,6 +276,9 @@ func TestNICCollectorGather(t *testing.T) {
 	if want := []string{"phy=PHY Temperature", "mac=MAC Temperature"}; !slices.Equal(sensors, want) {
 		t.Errorf("aquantia sensors = %v, want %v", sensors, want)
 	}
+	if aq.Temperatures[0].Interface != "eth2" {
+		t.Errorf("phy interface = %q", aq.Temperatures[0].Interface)
+	}
 	eth2 := aq.Ports[0]
 	if eth2.Carrier || eth2.SpeedMbps != nil || eth2.Duplex != "" || eth2.Module != nil || eth2.Master != "" {
 		t.Errorf("eth2 = %+v", eth2)
@@ -510,13 +513,23 @@ func TestCardTemperaturesModuleSensorsPerFunction(t *testing.T) {
 		{port: dto.NICPort{PCIAddress: "0000:05:00.0"}},
 		{port: dto.NICPort{PCIAddress: "0000:05:00.1"}},
 	}
+	crit := 90.0
 	temps := []dto.NICTemperature{
 		{Sensor: dto.NICSensorModule, Label: "Module0", PCIAddress: "0000:05:00.1", Celsius: 40},
 		{Sensor: dto.NICSensorModule, Label: "Module0", PCIAddress: "0000:05:00.0", Celsius: 41},
+		// Independent per-port PHYs with the same label are both kept.
+		{Sensor: dto.NICSensorPHY, Label: "PHY Temperature", PCIAddress: "0000:05:00.1", Celsius: 50},
+		{Sensor: dto.NICSensorPHY, Label: "PHY Temperature", PCIAddress: "0000:05:00.0", Celsius: 60, CritCelsius: &crit},
 		{Sensor: dto.NICSensorASIC, Label: "temp1", PCIAddress: "0000:06:00.0", Celsius: 70}, // another card
 	}
 	got := cardTemperatures(temps, ports)
-	if len(got) != 2 || got[0].PCIAddress != "0000:05:00.0" || got[1].PCIAddress != "0000:05:00.1" {
-		t.Errorf("got %+v", got)
+	if len(got) != 4 {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].Sensor != dto.NICSensorPHY || got[0].PCIAddress != "0000:05:00.0" || got[0].CritCelsius == nil || got[1].PCIAddress != "0000:05:00.1" {
+		t.Errorf("phy sensors = %+v", got[:2])
+	}
+	if got[2].PCIAddress != "0000:05:00.0" || got[3].PCIAddress != "0000:05:00.1" {
+		t.Errorf("module sensors = %+v", got[2:])
 	}
 }

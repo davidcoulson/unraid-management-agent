@@ -74,7 +74,8 @@ type NICTemperature struct {
 	Sensor string `json:"sensor" example:"asic"`
 	// Label is the hwmon label (temp*_label), or "temp<N>" when the driver sets none.
 	Label string `json:"label" example:"asic"`
-	// Interface is the port the sensor belongs to (module sensors), when known.
+	// Interface is the first port of the sensor's PCI function (every sensor but
+	// the card-wide ASIC).
 	Interface string `json:"interface,omitempty" example:"eth0"`
 	// PCIAddress is the PCI function whose hwmon chip reported the sensor.
 	PCIAddress string `json:"pci_address" example:"0000:41:00.0"`
@@ -137,6 +138,9 @@ type NICModule struct {
 	WavelengthNm *float64 `json:"wavelength_nm,omitempty" example:"850"`
 	// DDMSupported is true when the module reports digital diagnostics.
 	DDMSupported bool `json:"ddm_supported" example:"true"`
+	// DataNotReady is true while the module flags its monitors as not ready
+	// (powering up or resetting); readings and flags are omitted then.
+	DataNotReady bool `json:"data_not_ready,omitempty"`
 	// TemperatureCelsius is the module's internal temperature.
 	TemperatureCelsius *float64 `json:"temperature_celsius,omitempty" example:"50.43"`
 	// VoltageVolts is the module's supply voltage.
