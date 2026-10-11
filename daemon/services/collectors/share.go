@@ -3,6 +3,7 @@ package collectors
 import (
 	"bufio"
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -287,17 +288,22 @@ func (c *ShareCollector) collectShares(ctx context.Context) ([]dto.ShareInfo, er
 
 	// Enrich shares with configuration data
 	configCollector := NewConfigCollector()
+	exportUnknown := map[string]bool{}
 	for i := range shares {
-		c.enrichShareWithConfig(&shares[i], configCollector)
+		if !c.enrichShareWithConfig(&shares[i], configCollector) {
+			exportUnknown[shares[i].Name] = true
+		}
 	}
-	c.paths.applyExclusiveState(shares)
+	c.paths.applyExclusiveState(shares, exportUnknown)
 
 	logger.Debug("Share: Parsed %d shares successfully", len(shares))
 	return shares, nil
 }
 
-// enrichShareWithConfig enriches a share with configuration data
-func (c *ShareCollector) enrichShareWithConfig(share *dto.ShareInfo, configCollector *ConfigCollector) {
+// enrichShareWithConfig enriches a share with configuration data. It returns
+// false when the share's config exists but cannot be read, so its export
+// settings are unknown (a missing config means Unraid's defaults: not exported).
+func (c *ShareCollector) enrichShareWithConfig(share *dto.ShareInfo, configCollector *ConfigCollector) bool {
 	config, err := configCollector.GetShareConfig(share.Name)
 	if err != nil {
 		logger.Debug("Share: Failed to get config for share %s: %v", share.Name, err)
@@ -305,7 +311,7 @@ func (c *ShareCollector) enrichShareWithConfig(share *dto.ShareInfo, configColle
 		share.Storage = "unknown"
 		share.SMBExport = false
 		share.NFSExport = false
-		return
+		return errors.Is(err, errShareConfigNotFound)
 	}
 
 	// Populate configuration fields
@@ -323,6 +329,7 @@ func (c *ShareCollector) enrichShareWithConfig(share *dto.ShareInfo, configColle
 	share.MoverAction = c.determineMoverAction(share.UseCache, share.CachePool, share.CachePool2)
 
 	logger.Debug("Share: Enriched %s - Storage: %s, SMB: %v, NFS: %v, Cache: %s", share.Name, share.Storage, share.SMBExport, share.NFSExport, share.UseCache)
+	return true
 }
 
 // determineStorage determines storage location based on UseCache setting

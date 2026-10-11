@@ -2,9 +2,11 @@ package collectors
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
@@ -148,6 +150,13 @@ func poolOnly(name, pool string, exclusive bool) dto.ShareInfo {
 	return dto.ShareInfo{Name: name, UseCache: "only", CachePool: pool, Exclusive: boolPtr(exclusive)}
 }
 
+func locs(l *[]string) []string {
+	if l == nil {
+		return nil
+	}
+	return *l
+}
+
 func deref(b *bool) any {
 	if b == nil {
 		return nil
@@ -167,7 +176,7 @@ func TestApplyExclusiveState(t *testing.T) {
 		{Name: "old", UseCache: "only", CachePool: "cache"}, // no exclusive key in shares.ini
 		poolOnly("../escape", "cache", false),
 	}
-	p.applyExclusiveState(shares)
+	p.applyExclusiveState(shares, nil)
 
 	unchecked := []string{"disk4", "disk6", "slow"}
 	want := []struct {
@@ -190,11 +199,11 @@ func TestApplyExclusiveState(t *testing.T) {
 		if !reflect.DeepEqual(got.Exclusive, w.exclusive) ||
 			!reflect.DeepEqual(got.ExclusiveEligible, w.eligible) ||
 			got.ExclusivePool != w.pool ||
-			!reflect.DeepEqual(got.Locations, w.locations) ||
+			!reflect.DeepEqual(locs(got.Locations), w.locations) ||
 			!reflect.DeepEqual(got.LocationsUnchecked, w.unchecked) {
 			t.Errorf("%s: got exclusive=%v eligible=%v pool=%q locations=%#v unchecked=%#v, want %v %v %q %#v %#v",
 				got.Name, deref(got.Exclusive), deref(got.ExclusiveEligible), got.ExclusivePool,
-				got.Locations, got.LocationsUnchecked,
+				locs(got.Locations), got.LocationsUnchecked,
 				deref(w.exclusive), deref(w.eligible), w.pool, w.locations, w.unchecked)
 		}
 	}
@@ -203,12 +212,12 @@ func TestApplyExclusiveState(t *testing.T) {
 func TestApplyExclusiveStateGloballyDisabled(t *testing.T) {
 	p := exclusiveFixture(t, "shareUser=\"e\"\nfsState=\"Started\"\nshareUserExclusive=\"no\"\n")
 	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false)}
-	p.applyExclusiveState(shares)
+	p.applyExclusiveState(shares, nil)
 	if shares[0].Exclusive == nil || *shares[0].Exclusive || shares[0].ExclusiveEligible == nil || *shares[0].ExclusiveEligible {
 		t.Fatalf("want exclusive=false eligible=false, got %+v", shares[0])
 	}
 	if shares[0].Locations != nil {
-		t.Errorf("locations reported for an ineligible share: %v", shares[0].Locations)
+		t.Errorf("locations reported for an ineligible share: %v", *shares[0].Locations)
 	}
 }
 
@@ -221,7 +230,7 @@ func TestApplyExclusiveStateUnavailable(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			shares := []dto.ShareInfo{poolOnly("system", "cache", true)}
-			exclusiveFixture(t, varIni).applyExclusiveState(shares)
+			exclusiveFixture(t, varIni).applyExclusiveState(shares, nil)
 			if shares[0].Exclusive != nil || shares[0].ExclusiveEligible != nil || shares[0].ExclusivePool != "" {
 				t.Errorf("fields set although state is unknown: %+v", shares[0])
 			}
@@ -235,7 +244,7 @@ func TestApplyExclusiveStateNoDisksIni(t *testing.T) {
 		t.Fatal(err)
 	}
 	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false), poolOnly("downloads", "cache", false)}
-	p.applyExclusiveState(shares)
+	p.applyExclusiveState(shares, nil)
 	for _, s := range shares {
 		if s.Exclusive == nil || *s.Exclusive || s.Locations != nil || s.LocationsUnchecked != nil {
 			t.Errorf("%s: want FUSE with locations unknown, got %+v", s.Name, s)
@@ -267,10 +276,57 @@ func TestShareLocationsProbeError(t *testing.T) {
 func TestApplyExclusiveStateIncludedDisks(t *testing.T) {
 	p := exclusiveFixture(t, startedVarIni+"shareUserInclude=\"disk5\"\n")
 	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false)}
-	p.applyExclusiveState(shares)
+	p.applyExclusiveState(shares, nil)
 	// disk1 is not in the included disks; pools are unaffected.
-	if want := []string{"cache", "disk5"}; !reflect.DeepEqual(shares[0].Locations, want) {
-		t.Errorf("locations = %v, want %v", shares[0].Locations, want)
+	if want := []string{"cache", "disk5"}; !reflect.DeepEqual(locs(shares[0].Locations), want) {
+		t.Errorf("locations = %v, want %v", locs(shares[0].Locations), want)
+	}
+}
+
+func TestApplyExclusiveStateExportUnknown(t *testing.T) {
+	for version, eligible := range map[string]*bool{"7.1.4": nil, "7.4.0": boolPtr(true)} {
+		p := exclusiveFixture(t, startedVarIni+"version=\""+version+"\"\n")
+		shares := []dto.ShareInfo{poolOnly("appdata", "cache", false)}
+		p.applyExclusiveState(shares, map[string]bool{"appdata": true})
+		got := shares[0]
+		if deref(got.Exclusive) != false || !reflect.DeepEqual(got.ExclusiveEligible, eligible) {
+			t.Errorf("%s: exclusive=%v eligible=%v, want false %v", version, deref(got.Exclusive), deref(got.ExclusiveEligible), deref(eligible))
+		}
+		if (eligible == nil) != (got.Locations == nil) {
+			t.Errorf("%s: locations=%v with eligible=%v", version, locs(got.Locations), deref(eligible))
+		}
+	}
+}
+
+func TestEnrichShareWithConfigExportKnown(t *testing.T) {
+	c := &ShareCollector{}
+	cc := NewConfigCollector()
+	// No .cfg: Unraid defaults apply, so the export state is known.
+	if !c.enrichShareWithConfig(&dto.ShareInfo{Name: "no-such-share-cfg"}, cc) {
+		t.Error("missing share config should leave the export state known")
+	}
+	if c.enrichShareWithConfig(&dto.ShareInfo{Name: "../escape"}, cc) {
+		t.Error("unreadable share config should leave the export state unknown")
+	}
+}
+
+func TestShareLocationsJSON(t *testing.T) {
+	for _, tt := range []struct {
+		locations *[]string
+		want      string
+	}{
+		{nil, ""},
+		{&[]string{}, `"locations":[]`},
+		{&[]string{"cache", "disk1"}, `"locations":["cache","disk1"]`},
+	} {
+		out, err := json.Marshal(dto.ShareInfo{Name: "appdata", Locations: tt.locations})
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := strings.Contains(string(out), `"locations"`)
+		if (tt.want == "") == has || (tt.want != "" && !strings.Contains(string(out), tt.want)) {
+			t.Errorf("locations=%v serialized as %s, want %q", locs(tt.locations), out, tt.want)
+		}
 	}
 }
 
@@ -288,7 +344,7 @@ func TestApplyExclusiveStateNFSBeforeRelease72(t *testing.T) {
 	} {
 		p := exclusiveFixture(t, startedVarIni+"version=\""+tt.version+"\"\n")
 		shares := []dto.ShareInfo{nfsShare, poolOnly("downloads", "cache", false)}
-		p.applyExclusiveState(shares)
+		p.applyExclusiveState(shares, nil)
 		if got := *shares[0].ExclusiveEligible; got != tt.eligible {
 			t.Errorf("%s: NFS share eligible=%v, want %v", tt.version, got, tt.eligible)
 		}
@@ -333,7 +389,7 @@ cachePool="cache"
 	if s := shares[0]; deref(s.Exclusive) != true || s.ExclusivePool != "cache" || deref(s.ExclusiveEligible) != true {
 		t.Errorf("system: %+v", s)
 	}
-	if s := shares[1]; deref(s.Exclusive) != false || !reflect.DeepEqual(s.Locations, []string{"cache", "disk1", "disk5"}) {
+	if s := shares[1]; deref(s.Exclusive) != false || !reflect.DeepEqual(locs(s.Locations), []string{"cache", "disk1", "disk5"}) {
 		t.Errorf("appdata: %+v", s)
 	}
 	if s := shares[2]; s.Exclusive != nil || s.ExclusiveEligible != nil {

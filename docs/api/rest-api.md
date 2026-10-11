@@ -1465,13 +1465,13 @@ that live on a single pool, so their I/O bypasses the FUSE user share layer.
 If a top-level folder for the share also exists on another pool or array disk,
 the share silently stays on FUSE.
 
-| Field                 | Description                                                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `exclusive`           | `true` when `/mnt/user/<share>` is a symlink (exclusive access)                                                                                              |
-| `exclusive_eligible`  | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; before Unraid 7.2 also not NFS-exported)            |
-| `exclusive_pool`      | Pool the share's symlink points at (only when exclusive)                                                                                                     |
-| `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive. Entries other than `cache_pool` keep the share on FUSE |
-| `locations_unchecked` | Disks and pools not checked because a device is spun down, its spin state is unknown or the check failed, so the check never wakes a disk                    |
+| Field                 | Description                                                                                                                                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exclusive`           | `true` when `/mnt/user/<share>` is a symlink (exclusive access)                                                                                                                                                           |
+| `exclusive_eligible`  | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; before Unraid 7.2 also not NFS-exported). Omitted if that NFS rule applies but the share's config cannot be read |
+| `exclusive_pool`      | Pool the share's symlink points at (only when exclusive)                                                                                                                                                                  |
+| `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive (`[]` when none was found). Entries other than `cache_pool` keep the share on FUSE                                   |
+| `locations_unchecked` | Disks and pools not checked because a device is spun down, its spin state is unknown or the check failed, so the check never wakes a disk                                                                                 |
 
 `exclusive` is the flag emhttp records in `shares.ini` when it sets up the
 symlink, so nothing under `/mnt/user` (FUSE) is accessed. The fields are

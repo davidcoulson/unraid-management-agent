@@ -69,7 +69,10 @@ func (p sharePaths) disks() string {
 // it sets up the symlink, so nothing under /mnt/user (FUSE) is touched. The
 // fields are cleared when the release has no exclusive-share setting or the
 // user share file system is not mounted (array stopped, user shares disabled).
-func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo) {
+//
+// exportUnknown names shares whose config could not be read; on releases
+// where NFS export blocks exclusive access their eligibility stays unknown.
+func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo, exportUnknown map[string]bool) {
 	settings, supported := p.exclusiveSettings()
 	if !supported || !settings.userSharesMounted {
 		for i := range shares {
@@ -88,19 +91,26 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo) {
 			continue
 		}
 		exclusive := *share.Exclusive
-		eligible := settings.enabled && share.UseCache == "only" && share.CachePool != "" &&
-			share.CachePool2 == "" && (!settings.nfsBlocks || !share.NFSExport)
-		share.ExclusiveEligible = &eligible
 		if exclusive {
 			share.ExclusivePool = share.CachePool
 		}
+		eligible := settings.enabled && share.UseCache == "only" && share.CachePool != "" &&
+			share.CachePool2 == ""
+		if eligible && settings.nfsBlocks {
+			if exportUnknown[share.Name] {
+				continue // NFS export, and so eligibility, unknown
+			}
+			eligible = !share.NFSExport
+		}
+		share.ExclusiveEligible = &eligible
 
 		if eligible && !exclusive {
 			if !branchesLoaded {
 				branches, branchesLoaded = p.storageBranches(settings), true
 			}
 			if branches != nil { // nil: disks.ini unreadable, locations unknown
-				share.Locations, share.LocationsUnchecked = p.shareLocations(branches, share.Name)
+				found, unchecked := p.shareLocations(branches, share.Name)
+				share.Locations, share.LocationsUnchecked = &found, unchecked
 			}
 		}
 	}
