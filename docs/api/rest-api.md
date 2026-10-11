@@ -820,10 +820,26 @@ Get system information including CPU, memory, temperatures, and uptime.
   "iommu_enabled": true,
   "openssl_version": "OpenSSL 3.0.0",
   "kernel_version": "6.1.0-unRAID",
+  "temperatures": [
+    {
+      "name": "octo-hid-3-13_Coolant_temp_temp1_input",
+      "value_celsius": 31.2,
+      "sensor_type": "other",
+      "source": "octo-hid-3-13",
+      "device_id": "07274-50017"
+    }
+  ],
   "fans": [
     {
-      "name": "CPU Fan",
-      "rpm": 1200
+      "name": "nct6798_fan2",
+      "rpm": 1200,
+      "source": "nct6798-isa-0290"
+    },
+    {
+      "name": "octo_fan1",
+      "rpm": 850,
+      "source": "octo-hid-3-13",
+      "device_id": "07274-50017"
     }
   ],
   "timestamp": "2025-11-17T14:39:17+10:00"
@@ -862,7 +878,18 @@ Get system information including CPU, memory, temperatures, and uptime.
 - `iommu_enabled`: IOMMU enabled for PCIe passthrough
 - `openssl_version`: OpenSSL version (optional)
 - `kernel_version`: Linux kernel version (optional)
-- `fans`: Array of fan information (optional)
+- `temperatures`: Array of hwmon temperature readings (optional): `name`, `value_celsius`,
+  `sensor_type` (`cpu`, `motherboard`, `chipset`, `other`), `source` (lm-sensors chip name)
+  and `device_id` (see below)
+- `fans`: Array of fan information (optional): `name`, `rpm`, `source` (lm-sensors chip
+  name; omitted for the sysfs fallback) and `device_id`. Fans are named
+  `<chip model>_<fanN>` (e.g. `nct6798_fan2`); when two or more chips of the same model
+  report fans, all their fans are named `<chip model>-<device_id>_<fanN>`, or
+  `<full chip name>_<fanN>` for chips without a `device_id`, so none overwrites another
+- `device_id` (temperatures and fans): stable identity of the physical device of a USB
+  HID chip, whose lm-sensors name (`<driver>-hid-<bus>-<hid id>`) changes whenever the
+  device re-enumerates: the USB serial number, or `usb-<busnum>-<devpath>` (USB port
+  path) when the device has none. Omitted for all other chips, whose name is stable
 
 **Example**:
 
@@ -2157,6 +2184,7 @@ Get UPS status and information.
 ```json
 {
   "connected": true,
+  "device_name": "ups",
   "status": "OL",
   "load_percent": null,
   "battery_charge_percent": 100,
@@ -3322,7 +3350,11 @@ neither storcli (with at least one controller) nor sg_ses with SES devices is av
           "attached_enclosure_id": "50050cc100000702", "attached_iom": 1
         }
       ],
-      "phys": [ { "phy": 0, "port": 0, "connected": true, "link_rate_gbps": 12, "enabled": true }, ... ]
+      "phys": [ { "phy": 0, "port": 0, "connected": true, "link_rate_gbps": 12, "enabled": true }, ... ],
+      "throughput": {
+        "read_bytes_per_sec": 8806400, "write_bytes_per_sec": 4403200, "total_bytes_per_sec": 13209600,
+        "capacity_bytes_per_sec": 9600000000, "utilization_percent": 0.1, "drives": 43, "interval_seconds": 300
+      }
     }
   ],
   "enclosures": [
@@ -3349,7 +3381,11 @@ neither storcli (with at least one controller) nor sg_ses with SES devices is av
       "iom_firmware_mismatch": false,
       "iom_firmware_differs_from_peers": true,
       "redundancy": { "expected_paths": 2, "active_paths": 2, "single_path_drives": 0, "degraded": false, "reasons": [] },
-      "problems": []
+      "problems": [],
+      "throughput": {
+        "read_bytes_per_sec": 4505600, "write_bytes_per_sec": 2252800, "total_bytes_per_sec": 6758400,
+        "capacity_bytes_per_sec": 4800000000, "utilization_percent": 0.1, "drives": 22, "interval_seconds": 300
+      }
     }
   ],
   "drives": [
@@ -3385,6 +3421,17 @@ neither storcli (with at least one controller) nor sg_ses with SES devices is av
 | `enclosures[].problems`                        | Human-readable list of the enclosure's current problems                                                                                                                             |
 | `drives[].device`                              | Linux block device, matched by serial number (VPD page 0x80)                                                                                                                        |
 | `drives[].controller_ports`                    | Controller port used by each path, in path order                                                                                                                                    |
+
+**Throughput**: `controllers[].throughput` and `enclosures[].throughput` report the I/O of
+their drives (a controller counts its enclosure and direct-attached drives) between the
+last two collections, from the sector counters of each drive's block device in
+`/proc/diskstats` (kernel counters; nothing is sent to the drives). The object is omitted
+on the first collection and when none of the drives maps to a block device; counter
+resets count as zero. `capacity_bytes_per_sec` is the SAS payload capacity (8b/10b: link
+rate in Gbps x 100 MB/s per lane) of the controller's connected phys, or for an enclosure
+of the controller ports cabled directly to it. An enclosure reached only through another
+enclosure has capacity 0 and no `utilization_percent`; traffic to such a daisy-chained
+enclosure also crosses the links of the enclosure in front of it.
 
 **Example**:
 

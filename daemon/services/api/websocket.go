@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/constants"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/logger"
+	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/logger"
 )
 
 // maxWSMessageSize is the maximum allowed size (bytes) for an incoming WebSocket message.
@@ -53,6 +53,13 @@ func NewWSHub() *WSHub {
 		register:   make(chan *WSClient),
 		unregister: make(chan *WSClient),
 	}
+}
+
+// ClientCount returns the number of currently connected WebSocket clients.
+func (h *WSHub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
 }
 
 // Run starts the WebSocket hub's main event loop.

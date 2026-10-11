@@ -11,11 +11,11 @@ const docTemplate = `{
         "title": "{{.Title}}",
         "contact": {
             "name": "GitHub Issues",
-            "url": "https://github.com/ruaan-deysel/unraid-management-agent/issues"
+            "url": "https://github.com/tinkerologie/unraid-management-agent/issues"
         },
         "license": {
             "name": "MIT",
-            "url": "https://github.com/ruaan-deysel/unraid-management-agent/blob/main/LICENSE"
+            "url": "https://github.com/tinkerologie/unraid-management-agent/blob/main/LICENSE"
         },
         "version": "{{.Version}}"
     },
@@ -7993,6 +7993,11 @@ const docTemplate = `{
         "dto.FanInfo": {
             "type": "object",
             "properties": {
+                "device_id": {
+                    "description": "DeviceID is a stable identity of the chip's physical device, set only for\nUSB HID chips (whose lm-sensors name changes on every re-enumeration):\nthe USB serial number, or \"usb-\u003cbusnum\u003e-\u003cdevpath\u003e\" when it has none.",
+                    "type": "string",
+                    "example": "07274-50017"
+                },
                 "name": {
                     "type": "string",
                     "example": "CPU Fan"
@@ -8000,6 +8005,11 @@ const docTemplate = `{
                 "rpm": {
                     "type": "integer",
                     "example": 1200
+                },
+                "source": {
+                    "description": "Source is the lm-sensors chip the fan belongs to (empty for the sysfs fallback).",
+                    "type": "string",
+                    "example": "octo-hid-3-13"
                 }
             }
         },
@@ -10699,6 +10709,14 @@ const docTemplate = `{
                     "description": "TemperatureCelsius is the ROC (RAID-on-chip) or controller temperature.",
                     "type": "number",
                     "example": 62
+                },
+                "throughput": {
+                    "description": "Throughput is the combined I/O of the controller's drives (enclosure and\ndirect-attached) over the last collection interval; omitted on the first\ncollection and when none of its drives maps to a block device.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/dto.StorageThroughput"
+                        }
+                    ]
                 }
             }
         },
@@ -11093,6 +11111,14 @@ const docTemplate = `{
                         "$ref": "#/definitions/dto.EnclosureSensor"
                     }
                 },
+                "throughput": {
+                    "description": "Throughput is the combined I/O of the drives in this enclosure over the\nlast collection interval; omitted on the first collection and when none of\nits drives maps to a block device.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/dto.StorageThroughput"
+                        }
+                    ]
+                },
                 "vendor": {
                     "description": "Vendor is the enclosure vendor.",
                     "type": "string",
@@ -11128,6 +11154,46 @@ const docTemplate = `{
                     "description": "Revision is the INQUIRY product revision of the SES target (I/O module firmware).",
                     "type": "string",
                     "example": "0281"
+                }
+            }
+        },
+        "dto.StorageThroughput": {
+            "type": "object",
+            "properties": {
+                "capacity_bytes_per_sec": {
+                    "description": "CapacityBytesPerSec is the payload capacity of the SAS links (8b/10b:\nlink rate in Gbps x 1e8 bytes/s per lane); 0 when unknown. For a controller\nit covers its connected phys; for an enclosure, the controller ports cabled\ndirectly to it (0 for an enclosure only reached through another enclosure).",
+                    "type": "number",
+                    "example": 9600000000
+                },
+                "drives": {
+                    "description": "Drives is the number of drives whose I/O is counted.",
+                    "type": "integer",
+                    "example": 43
+                },
+                "interval_seconds": {
+                    "description": "IntervalSeconds is the measurement window (time between the two samples).",
+                    "type": "number",
+                    "example": 300
+                },
+                "read_bytes_per_sec": {
+                    "description": "ReadBytesPerSec is the combined read rate.",
+                    "type": "number",
+                    "example": 524288000
+                },
+                "total_bytes_per_sec": {
+                    "description": "TotalBytesPerSec is ReadBytesPerSec + WriteBytesPerSec.",
+                    "type": "number",
+                    "example": 629145600
+                },
+                "utilization_percent": {
+                    "description": "UtilizationPercent is TotalBytesPerSec / CapacityBytesPerSec x 100, rounded\nto 0.1; omitted when the capacity is unknown.",
+                    "type": "number",
+                    "example": 6.6
+                },
+                "write_bytes_per_sec": {
+                    "description": "WriteBytesPerSec is the combined write rate.",
+                    "type": "number",
+                    "example": 104857600
                 }
             }
         },
@@ -11516,6 +11582,11 @@ const docTemplate = `{
         "dto.TemperatureReading": {
             "type": "object",
             "properties": {
+                "device_id": {
+                    "description": "DeviceID is a stable identity of the chip's physical device, set only for\nUSB HID chips (whose lm-sensors name changes on every re-enumeration):\nthe USB serial number, or \"usb-\u003cbusnum\u003e-\u003cdevpath\u003e\" when it has none.",
+                    "type": "string",
+                    "example": "07274-50017"
+                },
                 "name": {
                     "type": "string",
                     "example": "coretemp_Core_0"
@@ -12353,7 +12424,7 @@ const docTemplate = `{
                     "example": 1.5
                 },
                 "corrupted_files": {
-                    "description": "CorruptedFiles lists files with permanent (checksum) errors, as reported\nby ` + "`" + `zpool status -v` + "`" + `. Unraid 7.3 (ZFS 2.4.1) surfaces these without a scrub.",
+                    "description": "CorruptedFiles lists files with permanent (checksum) errors, as reported\nby ` + "`" + `zpool status -v` + "`" + `. Unraid 7.3 (ZFS 2.4.1) surfaces these without a scrub.\nAlways present: [] when the pool has none, null only if ` + "`" + `zpool status` + "`" + ` failed.",
                     "type": "array",
                     "items": {
                         "type": "string"

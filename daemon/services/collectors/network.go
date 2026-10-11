@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -11,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/constants"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/lib"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/logger"
+	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/lib"
+	"github.com/tinkerologie/unraid-management-agent/daemon/logger"
 )
 
 // prevNetStats holds the previous collection's byte counts for rate calculation.
@@ -207,8 +208,15 @@ func (c *NetworkCollector) parseNetDev() (map[string]netStats, error) {
 		}
 	}()
 
+	return parseNetDevStats(file)
+}
+
+// parseNetDevStats parses /proc/net/dev-formatted content into per-interface
+// counters. The first two header lines are skipped; malformed rows (missing the
+// "iface:" separator or fewer than 16 numeric fields) are ignored.
+func parseNetDevStats(r io.Reader) (map[string]netStats, error) {
 	stats := make(map[string]netStats)
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 
 	// Skip header lines
 	scanner.Scan()

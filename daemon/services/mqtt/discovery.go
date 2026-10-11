@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/constants"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/logger"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/services/collectors"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/services/controllers"
+	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/logger"
+	"github.com/tinkerologie/unraid-management-agent/daemon/services/collectors"
+	"github.com/tinkerologie/unraid-management-agent/daemon/services/controllers"
 )
 
 // haEntityOpts holds configuration for a single HA MQTT discovery entity.
@@ -1502,7 +1502,7 @@ func (c *Client) publishZFSEntities(topic, prefix, displayName string) []string 
 		entityType: "sensor", stateTopic: topic,
 		id: prefix + "_corrupted_files", name: fmt.Sprintf("ZFS: %s Corrupted Files", displayName),
 		icon:       "mdi:file-alert",
-		template:   "{{ value_json.corrupted_files | default([]) | count }}",
+		template:   "{{ (value_json.corrupted_files or []) | count }}",
 		stateClass: "measurement",
 	})
 

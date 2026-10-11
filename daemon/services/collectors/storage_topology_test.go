@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
 )
 
 const topoFixtures = "testdata/storage_topology"
@@ -102,6 +102,7 @@ func newFixtureCollector(t *testing.T, runner *fakeRunner, binaries ...string) *
 		exists[b] = true
 	}
 	c.IsExecutable = func(p string) bool { return exists[p] }
+	c.DiskstatsPath = filepath.Join(t.TempDir(), "diskstats") // absent unless a test writes it
 	return c
 }
 

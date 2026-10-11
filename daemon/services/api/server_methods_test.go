@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
 )
 
 // ===== Mock CollectorManager =====
@@ -647,6 +647,23 @@ func TestStartSubscriptions_And_Stop(t *testing.T) {
 
 	// Wait for subscriptions to be fully wired
 	<-server.Ready()
+
+	// Publish after Ready and assert delivery
+	sysInfo := &dto.SystemInfo{Hostname: "ready-tested-host"}
+	ctx.Hub.Pub(sysInfo, "system_update")
+
+	deadline := time.Now().Add(1 * time.Second)
+	delivered := false
+	for time.Now().Before(deadline) {
+		if cached := server.systemCache.Load(); cached != nil && cached.Hostname == "ready-tested-host" {
+			delivered = true
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !delivered {
+		t.Fatal("published event was not delivered to server cache after Ready()")
+	}
 
 	// Stop should cancel all goroutines gracefully
 	server.Stop()

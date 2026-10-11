@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/constants"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/lib"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/logger"
+	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/lib"
+	"github.com/tinkerologie/unraid-management-agent/daemon/logger"
 )
 
 // UPSCollector collects UPS (Uninterruptible Power Supply) status information.
@@ -107,7 +107,11 @@ func (c *UPSCollector) collectAPC() (*dto.UPSStatus, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseAPCOutput(output)
+}
 
+// parseAPCOutput parses the stdout of apcaccess into a UPSStatus DTO.
+func parseAPCOutput(output string) (*dto.UPSStatus, error) {
 	status := &dto.UPSStatus{
 		Connected: true,
 		Timestamp: time.Now(),
@@ -202,10 +206,20 @@ func (c *UPSCollector) collectNUT() (*dto.UPSStatus, error) {
 		return nil, err
 	}
 
+	status, err := parseNUTUpscOutput(output)
+	if err != nil {
+		return nil, err
+	}
+	// Say which NUT device this is; GET /nut lists every device.
+	status.DeviceName = devices[0]
+	return status, nil
+}
+
+// parseNUTUpscOutput parses the stdout of upsc into a UPSStatus DTO.
+func parseNUTUpscOutput(output string) (*dto.UPSStatus, error) {
 	status := &dto.UPSStatus{
-		Connected:  true,
-		DeviceName: devices[0],
-		Timestamp:  time.Now(),
+		Connected: true,
+		Timestamp: time.Now(),
 	}
 
 	lines := strings.SplitSeq(output, "\n")

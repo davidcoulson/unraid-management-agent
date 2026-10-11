@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"reflect"
@@ -15,15 +16,15 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"golang.org/x/time/rate"
 
-	_ "github.com/ruaan-deysel/unraid-management-agent/daemon/docs" // Swagger docs
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/logger"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/services/agent"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/services/alerting"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/services/collectors"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/services/controllers"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/services/watchdog"
+	_ "github.com/tinkerologie/unraid-management-agent/daemon/docs" // Swagger docs
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/logger"
+	"github.com/tinkerologie/unraid-management-agent/daemon/services/agent"
+	"github.com/tinkerologie/unraid-management-agent/daemon/services/alerting"
+	"github.com/tinkerologie/unraid-management-agent/daemon/services/collectors"
+	"github.com/tinkerologie/unraid-management-agent/daemon/services/controllers"
+	"github.com/tinkerologie/unraid-management-agent/daemon/services/watchdog"
 )
 
 // CollectorManagerInterface defines the methods required from CollectorManager
@@ -74,6 +75,10 @@ type Server struct {
 
 	// diskSpinFn replaces the array controller's spin calls in tests.
 	diskSpinFn func(diskID string, up bool) error
+
+	// collectDiagnosticsFn and writeArchiveFn replace bundle collection and archive creation in tests.
+	collectDiagnosticsFn func(ctx context.Context, appCtx *domain.Context) (*dto.DiagnosticBundle, error)
+	writeArchiveFn       func(w io.Writer, b *dto.DiagnosticBundle) error
 
 	// Embedded cache store for lock-free atomic access to collector data
 	*CacheStore
