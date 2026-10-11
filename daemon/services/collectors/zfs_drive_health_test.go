@@ -205,8 +205,10 @@ func fakeSysfs(t *testing.T) (sysRoot, devRoot string) {
 	addDisk("nvme0n1", "nvme0n1p1")
 	addDisk("sdb", "sdb1")
 	addDisk("sdc", "sdc1")
-	touch(filepath.Join(sysRoot, "devices", "pci", "sdb", "queue", "rotational"))
-	if err := os.WriteFile(filepath.Join(sysRoot, "devices", "pci", "sdb", "queue", "rotational"), []byte("1\n"), 0o644); err != nil {
+	// sdd is a SAS hard drive (rotational); sdb has no rotational flag (SSD).
+	addDisk("sdd")
+	touch(filepath.Join(sysRoot, "devices", "pci", "sdd", "queue", "rotational"))
+	if err := os.WriteFile(filepath.Join(sysRoot, "devices", "pci", "sdd", "queue", "rotational"), []byte("1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	touch(filepath.Join(sysRoot, "devices", "pci", "sdc", "device", "vendor"))
@@ -587,7 +589,8 @@ func TestDescribeDisk(t *testing.T) {
 		want diskRef
 	}{
 		{"nvme0n1", diskRef{name: "nvme0n1", generation: "7", smartType: "nvme", io: "100/200"}},
-		{"sdb", diskRef{name: "sdb", generation: "7", smartType: "scsi", spinning: true, io: "100/200"}},
+		{"sdb", diskRef{name: "sdb", generation: "7", smartType: "scsi", io: "100/200"}},
+		{"sdd", diskRef{name: "sdd", generation: "7", smartType: "scsi", spinning: true, io: "100/200"}},
 		{"sdc", diskRef{name: "sdc", generation: "7", smartType: "sat", io: "100/200"}},
 		{"sdu", diskRef{name: "sdu"}},                                 // USB bridge: not read
 		{"vda", diskRef{name: "vda", generation: "7", io: "100/200"}}, // no SMART transport
@@ -682,35 +685,58 @@ func TestDriveHealthCacheHoldsSlotsForStuckProcesses(t *testing.T) {
 	}
 }
 
-// TestDriveHealthCacheSpinningSCSIOnlyAfterIO checks that a rotational SCSI
-// disk, whose power check cannot fail closed, is re-read only after it has
-// done I/O since the last read.
-func TestDriveHealthCacheSpinningSCSIOnlyAfterIO(t *testing.T) {
+// TestDriveHealthCacheSpinningSCSIOnlyWhenRecentlyActive checks that a
+// rotational SCSI disk, whose power check cannot fail closed, is read only
+// when it did I/O between two observations close enough together that it
+// cannot have spun down since.
+func TestDriveHealthCacheSpinningSCSIOnlyWhenRecentlyActive(t *testing.T) {
 	clock := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	runner := &fakeSmartctl{outputs: map[string]string{"sdb": readSmartctlFixture(t, "scsi.json")}}
 	cache := newTestCache(t, runner, &clock)
 	disk := diskRef{name: "sdb", smartType: "scsi", spinning: true, io: "100/200"}
-
-	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil {
-		t.Fatal("first read missing")
+	expectCalls := func(step string, want int) {
+		t.Helper()
+		if calls := runner.takeCalls(); len(calls) != want {
+			t.Fatalf("%s: calls = %v, want %d", step, calls, want)
+		}
 	}
-	runner.takeCalls()
 
-	// TTL passed, no I/O: not read, last reading kept.
+	// First observation (e.g. agent start): the disk may be asleep; not read.
+	if got := cache.lookup([]diskRef{disk}); len(got) != 0 {
+		t.Fatalf("first observation returned %v", got)
+	}
+	expectCalls("first observation", 0)
+
+	// No I/O since: still not read.
+	clock = clock.Add(time.Minute)
+	cache.lookup([]diskRef{disk})
+	expectCalls("idle", 0)
+
+	// I/O since the last observation a minute ago: spinning, read.
+	clock = clock.Add(time.Minute)
+	disk.io = "101/200"
+	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil {
+		t.Fatal("recently active disk not read")
+	}
+	expectCalls("recent I/O", 1)
+
+	// TTL passed, no I/O: last reading kept, not re-read.
 	clock = clock.Add(driveHealthTTL)
 	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil || !got["sdb"].CollectedAt.Before(clock) {
 		t.Errorf("idle disk reading = %+v", got["sdb"])
 	}
-	if calls := runner.takeCalls(); len(calls) != 0 {
-		t.Fatalf("idle rotational SCSI disk was read: %v", calls)
-	}
+	expectCalls("idle after TTL", 0)
 
-	// The disk did I/O: read again.
-	disk.io = "101/200"
-	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil || !got["sdb"].CollectedAt.Equal(clock) {
-		t.Errorf("busy disk reading = %+v", got["sdb"])
-	}
-	if calls := runner.takeCalls(); len(calls) != 1 {
-		t.Fatalf("calls after I/O = %v", calls)
-	}
+	// I/O happened, but the previous observation is older than the activity
+	// window: the disk may have spun down since. Not read.
+	clock = clock.Add(driveHealthActivityWindow + time.Minute)
+	disk.io = "150/260"
+	cache.lookup([]diskRef{disk})
+	expectCalls("stale activity", 0)
+
+	// Counters unreadable: never read.
+	clock = clock.Add(time.Minute)
+	disk.io = ""
+	cache.lookup([]diskRef{disk})
+	expectCalls("no counters", 0)
 }

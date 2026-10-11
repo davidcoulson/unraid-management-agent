@@ -23,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not read. Drives in standby are not woken: ATA drives use a fail-closed power
   check (`-n standby,2,3`, so a drive whose power mode can't be read is not
   read either), and rotational SCSI drives, whose power check can't fail
-  closed, are only re-read after the kernel shows I/O on them since the last
-  read; until then the last reading is kept. Readings are cached per disk for
+  closed, are only read when the kernel's I/O counters changed between two
+  observations at most 10 minutes apart (shorter than Unraid's shortest
+  spin-down delay), so an idle SAS drive is never read and keeps its last
+  reading. Readings are cached per disk for
   5 minutes and dropped when the kernel's `diskseq` shows a different disk
   under the same name. At most 4 smartctl processes exist at once (a timed-out
   one keeps its slot until it exits; 15 s timeout). Serial numbers are never

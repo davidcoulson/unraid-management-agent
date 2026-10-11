@@ -26,6 +26,10 @@ const (
 	driveHealthTTL = 5 * time.Minute
 	// driveHealthTimeout bounds one smartctl run.
 	driveHealthTimeout = 15 * time.Second
+	// driveHealthActivityWindow is how recent I/O must be for a rotational
+	// SCSI disk to be read. It is shorter than Unraid's shortest spin-down
+	// delay (15 minutes), so a disk that did I/O within it is still spinning.
+	driveHealthActivityWindow = 10 * time.Minute
 	// driveHealthWorkers bounds how many smartctl processes exist at once,
 	// including ones that timed out but have not exited yet.
 	driveHealthWorkers = 4
@@ -48,7 +52,8 @@ type diskRef struct {
 	smartType string
 	// spinning is true for a rotational SCSI disk. smartctl has no
 	// fail-closed power check for SCSI (a stopped drive can look active), so
-	// such a disk is only re-read after it has done I/O since the last read.
+	// such a disk is only read when it did I/O between the last two
+	// observations, taken at most driveHealthActivityWindow apart.
 	spinning bool
 	// io is the disk's completed read/write counts from its sysfs stat file.
 	// smartctl's SG_IO commands are not counted, so an unchanged value means
@@ -107,7 +112,8 @@ type driveHealthEntry struct {
 	health     *dto.DriveHealth // last successful read, nil if none
 	standby    bool             // asleep at the last attempt
 	attempted  time.Time        // last time smartctl was run
-	io         string           // diskRef.io at the last attempt
+	seenIO     string           // diskRef.io at the last lookup
+	seenAt     time.Time        // time of the last lookup
 	inflight   <-chan struct{}  // closed once the last smartctl process exited
 }
 
@@ -162,6 +168,9 @@ func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 			entry = &driveHealthEntry{generation: ref.generation}
 			c.entries[ref.name] = entry
 		}
+		recentIO := !entry.seenAt.IsZero() && now.Sub(entry.seenAt) <= driveHealthActivityWindow &&
+			ref.io != "" && ref.io != entry.seenIO
+		entry.seenIO, entry.seenAt = ref.io, now
 		if !entry.attempted.IsZero() && now.Sub(entry.attempted) < c.ttl {
 			continue
 		}
@@ -169,9 +178,9 @@ func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 			// A previous smartctl for this disk is still stuck; don't pile up.
 			continue
 		}
-		if ref.spinning && !entry.attempted.IsZero() && ref.io == entry.io {
-			// No I/O since the last read: the disk may be spun down, and a
-			// SCSI read could wake it. Keep the last reading.
+		if ref.spinning && !recentIO {
+			// Not known to be spinning right now, and a SCSI read could wake
+			// it. Keep the last reading, if any.
 			continue
 		}
 		stale = append(stale, ref)
@@ -205,7 +214,6 @@ func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 	type outcome struct {
 		disk     string
-		io       string
 		health   *dto.DriveHealth
 		standby  bool
 		inflight <-chan struct{}
@@ -234,7 +242,7 @@ func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 			if err != nil {
 				logger.Debug("ZFS: SMART read of %s failed: %v (smartctl: %v)", ref.name, err, runErr)
 			}
-			results <- outcome{disk: ref.name, io: ref.io, health: health, standby: standby, inflight: done}
+			results <- outcome{disk: ref.name, health: health, standby: standby, inflight: done}
 		}()
 	}
 	wg.Wait()
@@ -243,7 +251,6 @@ func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 	for r := range results {
 		entry := c.entries[r.disk]
 		entry.attempted = now
-		entry.io = r.io
 		entry.inflight = r.inflight
 		switch {
 		case r.standby:
