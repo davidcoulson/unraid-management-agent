@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`disks.ini`) is not read and keeps its last reading, flagged `standby`; ATA
   drives use a fail-closed power check (`-n standby,2,3`, so a drive whose
   power mode can't be read is not read either); and rotational SCSI drives,
-  whose power check can't fail closed, are read only when Unraid manages them
+  (or with an unknown rotational flag), whose power check can't fail closed,
+  are read only when Unraid manages them
   and reports them spinning. The spin state is checked again right before each
   smartctl run. Readings are cached per disk for
   5 minutes and dropped when the kernel's `diskseq` shows a different disk

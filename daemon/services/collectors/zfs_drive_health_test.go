@@ -202,7 +202,12 @@ func fakeSysfs(t *testing.T) (sysRoot, devRoot string) {
 	addDisk("nvme0n1", "nvme0n1p1")
 	addDisk("sdb", "sdb1")
 	addDisk("sdc", "sdc1")
-	// sdd is a SAS hard drive (rotational); sdb has no rotational flag (SSD).
+	// sdb is a SAS SSD, sdd a SAS hard drive; sde has no rotational flag.
+	touch(filepath.Join(sysRoot, "devices", "pci", "sdb", "queue", "rotational"))
+	if err := os.WriteFile(filepath.Join(sysRoot, "devices", "pci", "sdb", "queue", "rotational"), []byte("0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	addDisk("sde")
 	addDisk("sdd")
 	touch(filepath.Join(sysRoot, "devices", "pci", "sdd", "queue", "rotational"))
 	if err := os.WriteFile(filepath.Join(sysRoot, "devices", "pci", "sdd", "queue", "rotational"), []byte("1\n"), 0o644); err != nil {
@@ -594,6 +599,8 @@ func TestDescribeDisk(t *testing.T) {
 		{"sdd", nil, diskRef{name: "sdd", generation: "7", unraidOnly: true}},
 		{"sdd", map[string]bool{"sdd": false}, diskRef{name: "sdd", generation: "7", smartType: "scsi", unraidOnly: true}},
 		{"sdd", map[string]bool{"sdd": true}, diskRef{name: "sdd", generation: "7", smartType: "scsi", asleep: true, unraidOnly: true}},
+		// Unknown rotational flag: treated as a hard drive.
+		{"sde", nil, diskRef{name: "sde", generation: "7", unraidOnly: true}},
 		{"sdu", spin, diskRef{name: "sdu"}},                  // USB bridge: not read
 		{"vda", spin, diskRef{name: "vda", generation: "7"}}, // no SMART transport
 		{"sdz", spin, diskRef{name: "sdz"}},                  // gone

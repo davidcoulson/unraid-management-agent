@@ -98,9 +98,10 @@ func describeDisk(sysRoot, disk string, spinStates map[string]bool) diskRef {
 		switch {
 		case strings.TrimSpace(string(vendor)) == "ATA":
 			ref.smartType = "sat"
-		case strings.TrimSpace(string(rotational)) != "1":
+		case strings.TrimSpace(string(rotational)) == "0":
 			ref.smartType = "scsi"
 		default:
+			// Rotational, or unknown: treat as rotational.
 			ref.unraidOnly = true
 			if managed {
 				ref.smartType = "scsi"
