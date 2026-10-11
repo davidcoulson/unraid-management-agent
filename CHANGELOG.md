@@ -19,8 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   temperature, power-on hours, NVMe percentage used / available spare / critical
   warning, and media errors (NVMe media errors, SCSI uncorrected errors or ATA
   attribute 187). smartctl gets an explicit device type from sysfs (`nvme`,
-  `sat` or `scsi`) so it does not probe the drive, USB-attached disks are not
-  read, and drives in standby are not woken. Readings are cached per disk for
+  `sat` or `scsi`) so it does not probe the drive, and USB-attached disks are
+  not read. Drives in standby are not woken: ATA drives use a fail-closed power
+  check (`-n standby,2,3`, so a drive whose power mode can't be read is not
+  read either), and rotational SCSI drives, whose power check can't fail
+  closed, are only re-read after the kernel shows I/O on them since the last
+  read; until then the last reading is kept. Readings are cached per disk for
   5 minutes and dropped when the kernel's `diskseq` shows a different disk
   under the same name. At most 4 smartctl processes exist at once (a timed-out
   one keeps its slot until it exits; 15 s timeout). Serial numbers are never

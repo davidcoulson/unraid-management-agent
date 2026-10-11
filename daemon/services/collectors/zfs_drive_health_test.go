@@ -85,6 +85,21 @@ func TestParseSmartctlJSON(t *testing.T) {
 			wantStandby: true,
 		},
 		{
+			name:        "scsi low power",
+			output:      `{"smartctl":{"messages":[{"string":"Device is in LOW POWER mode, exit(2)","severity":"information"}],"exit_status":2},"device":{"protocol":"SCSI"}}`,
+			wantStandby: true,
+		},
+		{
+			name:    "ata power check unsupported (fails closed)",
+			output:  `{"smartctl":{"messages":[{"string":"CHECK POWER MODE not implemented, exit(3)","severity":"information"}],"exit_status":3},"device":{"protocol":"ATA"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "ata power check unknown value (fails closed)",
+			output:  `{"smartctl":{"messages":[{"string":"CHECK POWER MODE returned unknown value 0x42, exit(3)","severity":"information"}],"exit_status":3},"device":{"protocol":"ATA"}}`,
+			wantErr: true,
+		},
+		{
 			name:    "open failed",
 			output:  readSmartctlFixture(t, "open-failed.json"),
 			wantErr: true,
@@ -177,6 +192,10 @@ func fakeSysfs(t *testing.T) (sysRoot, devRoot string) {
 		if err := os.WriteFile(filepath.Join(dir, "diskseq"), []byte("7\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		stat := "     100        0     8000       10      200        0     1600       20        0       30       30\n"
+		if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		for _, part := range parts {
 			touch(filepath.Join(dir, part, "partition"))
 			link(filepath.Join(dir, part), filepath.Join(block, part))
@@ -186,6 +205,10 @@ func fakeSysfs(t *testing.T) (sysRoot, devRoot string) {
 	addDisk("nvme0n1", "nvme0n1p1")
 	addDisk("sdb", "sdb1")
 	addDisk("sdc", "sdc1")
+	touch(filepath.Join(sysRoot, "devices", "pci", "sdb", "queue", "rotational"))
+	if err := os.WriteFile(filepath.Join(sysRoot, "devices", "pci", "sdb", "queue", "rotational"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	touch(filepath.Join(sysRoot, "devices", "pci", "sdc", "device", "vendor"))
 	if err := os.WriteFile(filepath.Join(sysRoot, "devices", "pci", "sdc", "device", "vendor"), []byte("ATA     \n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -563,12 +586,12 @@ func TestDescribeDisk(t *testing.T) {
 		disk string
 		want diskRef
 	}{
-		{"nvme0n1", diskRef{name: "nvme0n1", generation: "7", smartType: "nvme"}},
-		{"sdb", diskRef{name: "sdb", generation: "7", smartType: "scsi"}},
-		{"sdc", diskRef{name: "sdc", generation: "7", smartType: "sat"}},
-		{"sdu", diskRef{name: "sdu"}},                  // USB bridge: not read
-		{"vda", diskRef{name: "vda", generation: "7"}}, // no SMART transport
-		{"sdz", diskRef{name: "sdz"}},                  // gone
+		{"nvme0n1", diskRef{name: "nvme0n1", generation: "7", smartType: "nvme", io: "100/200"}},
+		{"sdb", diskRef{name: "sdb", generation: "7", smartType: "scsi", spinning: true, io: "100/200"}},
+		{"sdc", diskRef{name: "sdc", generation: "7", smartType: "sat", io: "100/200"}},
+		{"sdu", diskRef{name: "sdu"}},                                 // USB bridge: not read
+		{"vda", diskRef{name: "vda", generation: "7", io: "100/200"}}, // no SMART transport
+		{"sdz", diskRef{name: "sdz"}},                                 // gone
 	}
 	for _, tt := range tests {
 		if got := describeDisk(sysRoot, tt.disk); got != tt.want {
@@ -656,5 +679,38 @@ func TestDriveHealthCacheHoldsSlotsForStuckProcesses(t *testing.T) {
 	}
 	if got["sdb"] == nil {
 		t.Error("sdb not read after the slot freed")
+	}
+}
+
+// TestDriveHealthCacheSpinningSCSIOnlyAfterIO checks that a rotational SCSI
+// disk, whose power check cannot fail closed, is re-read only after it has
+// done I/O since the last read.
+func TestDriveHealthCacheSpinningSCSIOnlyAfterIO(t *testing.T) {
+	clock := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	runner := &fakeSmartctl{outputs: map[string]string{"sdb": readSmartctlFixture(t, "scsi.json")}}
+	cache := newTestCache(t, runner, &clock)
+	disk := diskRef{name: "sdb", smartType: "scsi", spinning: true, io: "100/200"}
+
+	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil {
+		t.Fatal("first read missing")
+	}
+	runner.takeCalls()
+
+	// TTL passed, no I/O: not read, last reading kept.
+	clock = clock.Add(driveHealthTTL)
+	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil || !got["sdb"].CollectedAt.Before(clock) {
+		t.Errorf("idle disk reading = %+v", got["sdb"])
+	}
+	if calls := runner.takeCalls(); len(calls) != 0 {
+		t.Fatalf("idle rotational SCSI disk was read: %v", calls)
+	}
+
+	// The disk did I/O: read again.
+	disk.io = "101/200"
+	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil || !got["sdb"].CollectedAt.Equal(clock) {
+		t.Errorf("busy disk reading = %+v", got["sdb"])
+	}
+	if calls := runner.takeCalls(); len(calls) != 1 {
+		t.Fatalf("calls after I/O = %v", calls)
 	}
 }

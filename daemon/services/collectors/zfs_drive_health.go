@@ -46,6 +46,14 @@ type diskRef struct {
 	// the disk is not read (USB bridges and other transports may ignore the
 	// standby check and wake the drive).
 	smartType string
+	// spinning is true for a rotational SCSI disk. smartctl has no
+	// fail-closed power check for SCSI (a stopped drive can look active), so
+	// such a disk is only re-read after it has done I/O since the last read.
+	spinning bool
+	// io is the disk's completed read/write counts from its sysfs stat file.
+	// smartctl's SG_IO commands are not counted, so an unchanged value means
+	// nothing has touched the disk.
+	io string
 }
 
 // describeDisk works out how to read a disk's SMART data from sysfs alone.
@@ -54,6 +62,11 @@ func describeDisk(sysRoot, disk string) diskRef {
 	block := filepath.Join(sysRoot, "class", "block", disk)
 	if seq, err := os.ReadFile(filepath.Join(block, "diskseq")); err == nil { // #nosec G304 -- sysfs path built from a validated kernel device name
 		ref.generation = strings.TrimSpace(string(seq))
+	}
+	if stat, err := os.ReadFile(filepath.Join(block, "stat")); err == nil { // #nosec G304 -- sysfs path built from a validated kernel device name
+		if f := strings.Fields(string(stat)); len(f) >= 5 {
+			ref.io = f[0] + "/" + f[4]
+		}
 	}
 	real, err := filepath.EvalSymlinks(block)
 	switch {
@@ -67,6 +80,8 @@ func describeDisk(sysRoot, disk string) diskRef {
 			ref.smartType = "sat"
 		} else {
 			ref.smartType = "scsi"
+			rotational, _ := os.ReadFile(filepath.Join(block, "queue", "rotational")) // #nosec G304 -- sysfs path built from a validated kernel device name
+			ref.spinning = strings.TrimSpace(string(rotational)) == "1"
 		}
 	}
 	return ref
@@ -78,10 +93,12 @@ type smartctlRunner func(timeout time.Duration, disk, smartType string) (string,
 
 // runSmartctl reads a disk's SMART data as JSON without waking it from
 // standby. The device type is given explicitly so smartctl does not send
-// detection commands before its power-mode check.
+// detection commands before its power-mode check, and for ATA the check fails
+// closed: when CHECK POWER MODE is unsupported or returns an unknown value,
+// smartctl exits (status 3) instead of reading the drive.
 func runSmartctl(timeout time.Duration, disk, smartType string) (string, <-chan struct{}, error) {
 	return lib.ExecCommandStdoutGuarded(context.Background(), timeout,
-		constants.SmartctlBin, "-j", "-a", "-n", "standby", "-d", smartType, "/dev/"+disk)
+		constants.SmartctlBin, "-j", "-a", "-n", "standby,2,3", "-d", smartType, "/dev/"+disk)
 }
 
 // driveHealthEntry is the cached state of one disk.
@@ -90,6 +107,7 @@ type driveHealthEntry struct {
 	health     *dto.DriveHealth // last successful read, nil if none
 	standby    bool             // asleep at the last attempt
 	attempted  time.Time        // last time smartctl was run
+	io         string           // diskRef.io at the last attempt
 	inflight   <-chan struct{}  // closed once the last smartctl process exited
 }
 
@@ -151,6 +169,11 @@ func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 			// A previous smartctl for this disk is still stuck; don't pile up.
 			continue
 		}
+		if ref.spinning && !entry.attempted.IsZero() && ref.io == entry.io {
+			// No I/O since the last read: the disk may be spun down, and a
+			// SCSI read could wake it. Keep the last reading.
+			continue
+		}
 		stale = append(stale, ref)
 	}
 	for disk := range c.entries {
@@ -182,6 +205,7 @@ func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 	type outcome struct {
 		disk     string
+		io       string
 		health   *dto.DriveHealth
 		standby  bool
 		inflight <-chan struct{}
@@ -210,7 +234,7 @@ func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 			if err != nil {
 				logger.Debug("ZFS: SMART read of %s failed: %v (smartctl: %v)", ref.name, err, runErr)
 			}
-			results <- outcome{disk: ref.name, health: health, standby: standby, inflight: done}
+			results <- outcome{disk: ref.name, io: ref.io, health: health, standby: standby, inflight: done}
 		}()
 	}
 	wg.Wait()
@@ -219,6 +243,7 @@ func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 	for r := range results {
 		entry := c.entries[r.disk]
 		entry.attempted = now
+		entry.io = r.io
 		entry.inflight = r.inflight
 		switch {
 		case r.standby:
@@ -287,6 +312,10 @@ type scsiErrorCounters struct {
 	TotalUncorrected *uint64 `json:"total_uncorrected_errors"`
 }
 
+// lowPowerMessage matches smartctl's "Device is in STANDBY mode, exit(2)"
+// (also SLEEP, LOW POWER, IDLE_B... for SCSI), printed when -n skipped the drive.
+var lowPowerMessage = regexp.MustCompile(`^Device is in .+ mode, exit\(\d+\)`)
+
 // ataReportedUncorrect is ATA SMART attribute 187 (Reported_Uncorrect).
 const ataReportedUncorrect = 187
 
@@ -308,9 +337,11 @@ func parseSmartctlJSON(out string, now time.Time) (*dto.DriveHealth, bool, error
 		}
 	}
 	for _, msg := range raw.Smartctl.Messages {
-		upper := strings.ToUpper(msg.String)
-		if strings.Contains(upper, "STANDBY") || strings.Contains(upper, "SLEEP") {
+		switch {
+		case lowPowerMessage.MatchString(msg.String):
 			return nil, true, nil
+		case strings.HasPrefix(msg.String, "CHECK POWER MODE"):
+			return nil, false, fmt.Errorf("power mode unknown, drive not read: %s", strings.TrimSpace(msg.String))
 		}
 	}
 	if raw.Device.Protocol == "" && raw.ModelName == "" {
