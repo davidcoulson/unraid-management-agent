@@ -34,8 +34,9 @@ type ShareInfo struct {
 	// ExclusiveEligible is true when exclusive shares are enabled globally and
 	// the share lives on a single pool (primary pool only, no secondary storage
 	// — on servers without array slots any primary pool with no secondary pool;
-	// before Unraid 7.2 also not exported over NFS). Omitted when that NFS
-	// rule applies but the share's config cannot be read.
+	// before Unraid 7.2 also not exported over NFS) and that pool exists.
+	// Omitted when this cannot be determined (share config or disk list
+	// unreadable).
 	ExclusiveEligible *bool `json:"exclusive_eligible,omitempty" example:"true"`
 	// ExclusivePool is the share's pool for exclusive access: the symlink
 	// target when exclusive, otherwise the pool a pool-only share would be

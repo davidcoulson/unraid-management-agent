@@ -10472,7 +10472,7 @@ const docTemplate = `{
                     "example": true
                 },
                 "exclusive_eligible": {
-                    "description": "ExclusiveEligible is true when exclusive shares are enabled globally and\nthe share lives on a single pool (primary pool only, no secondary storage\n— on servers without array slots any primary pool with no secondary pool;\nbefore Unraid 7.2 also not exported over NFS). Omitted when that NFS\nrule applies but the share's config cannot be read.",
+                    "description": "ExclusiveEligible is true when exclusive shares are enabled globally and\nthe share lives on a single pool (primary pool only, no secondary storage\n— on servers without array slots any primary pool with no secondary pool;\nbefore Unraid 7.2 also not exported over NFS) and that pool exists.\nOmitted when this cannot be determined (share config or disk list\nunreadable).",
                     "type": "boolean",
                     "example": true
                 },

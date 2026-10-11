@@ -111,6 +111,15 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo, exportUnknown ma
 		}
 		poolOnly := pool != "" && share.CachePool2 == "" &&
 			(share.UseCache == "only" || settings.poolsOnly)
+		if poolOnly && !exclusive {
+			// A removed or renamed pool makes the assignment invalid rather
+			// than eligible; without the pool list eligibility is unknown.
+			disks := loadDisks()
+			if disks == nil {
+				continue
+			}
+			poolOnly = poolNames(disks)[pool]
+		}
 		if exclusive || poolOnly {
 			share.ExclusivePool = pool
 		}
@@ -144,6 +153,18 @@ func (p sharePaths) readDisks() map[string]map[string]string {
 		return nil
 	}
 	return parseINISections(string(data))
+}
+
+// poolNames returns the configured pools: Cache entries of disks.ini named
+// without the member number suffix, as the webGUI lists them.
+func poolNames(disks map[string]map[string]string) map[string]bool {
+	pools := map[string]bool{}
+	for section, kv := range disks {
+		if kv["type"] == "Cache" {
+			pools[strings.TrimRightFunc(section, unicode.IsDigit)] = true
+		}
+	}
+	return pools
 }
 
 // firstPool returns the pool the webGUI assigns to a share without a primary
