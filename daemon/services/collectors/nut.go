@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
@@ -146,20 +147,33 @@ func (c *NUTCollector) Collect() {
 
 // collectStatuses queries every device. It returns the first device's status
 // (nil if that query failed) and the statuses of all devices that answered, in
-// device order. A device that fails is logged and left out.
+// device order. A device that fails is logged and left out. Devices are queried
+// concurrently, so a slow or unreachable device delays the cycle by at most
+// one query timeout rather than one per device.
 func (c *NUTCollector) collectStatuses(devices []dto.NUTDevice, host string) (*dto.NUTStatus, []*dto.NUTStatus) {
-	var first *dto.NUTStatus
-	var statuses []*dto.NUTStatus
+	results := make([]*dto.NUTStatus, len(devices))
+	var wg sync.WaitGroup
 	for i, device := range devices {
-		status, err := c.collectStatus(device.Name, host)
-		if err != nil {
-			logger.Warning("Failed to collect NUT status for %s: %v", device.Name, err)
-			continue
+		wg.Go(func() {
+			status, err := c.collectStatus(device.Name, host)
+			if err != nil {
+				logger.Warning("Failed to collect NUT status for %s: %v", device.Name, err)
+				return
+			}
+			results[i] = status
+		})
+	}
+	wg.Wait()
+
+	var first *dto.NUTStatus
+	if len(results) > 0 {
+		first = results[0]
+	}
+	var statuses []*dto.NUTStatus
+	for _, status := range results {
+		if status != nil {
+			statuses = append(statuses, status)
 		}
-		if i == 0 {
-			first = status
-		}
-		statuses = append(statuses, status)
 	}
 	return first, statuses
 }

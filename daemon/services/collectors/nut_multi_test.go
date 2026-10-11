@@ -112,6 +112,41 @@ func TestNUTCollectorCollectSkipsFailingDevice(t *testing.T) {
 	}
 }
 
+func TestNUTCollectorCollectStatusesConcurrently(t *testing.T) {
+	// The first device answers only once the last one has been queried, so a
+	// sequential loop would time it out. Results keep device order.
+	exec := fakeExec(map[string]string{
+		"upsc ups@localhost": upscSmartUPSX3000,
+		"upsc ats@localhost": upscAP7752ATS,
+	})
+	atsQueried := make(chan struct{})
+	c := newTestNUTCollector(nil)
+	c.execOutput = func(command string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-l localhost":
+			return "ups\nats\n", nil
+		case "ups@localhost":
+			select {
+			case <-atsQueried:
+			case <-time.After(time.Second):
+				return "", errors.New("ups queried before ats: devices are queried sequentially")
+			}
+		case "ats@localhost":
+			close(atsQueried)
+		}
+		return exec(command, args...)
+	}
+
+	resp := collectNUTResponse(t, c)
+
+	if len(resp.Statuses) != 2 || resp.Statuses[0].DeviceName != "ups" || resp.Statuses[1].DeviceName != "ats" {
+		t.Fatalf("statuses = %+v, want ups then ats", resp.Statuses)
+	}
+	if resp.Status != resp.Statuses[0] {
+		t.Errorf("status = %+v, want statuses[0]", resp.Status)
+	}
+}
+
 func TestNUTCollectorCollectNotInstalledOrNotRunning(t *testing.T) {
 	c := newTestNUTCollector(nil)
 	c.stat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
