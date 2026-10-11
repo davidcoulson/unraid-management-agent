@@ -1437,10 +1437,43 @@ List all user shares.
     "used_bytes": 50000000000,
     "free_bytes": 50000000000,
     "usage_percent": 50.0,
+    "use_cache": "only",
+    "cache_pool": "cache",
+    "exclusive": true,
+    "exclusive_eligible": true,
+    "exclusive_pool": "cache",
+    "timestamp": "2025-10-03T13:41:13+10:00"
+  },
+  {
+    "name": "media",
+    "used_bytes": 2000000000000,
+    "free_bytes": 1000000000000,
+    "usage_percent": 66.7,
+    "use_cache": "only",
+    "cache_pool": "fast",
+    "exclusive": false,
+    "exclusive_eligible": true,
+    "locations": ["disk1", "fast"],
     "timestamp": "2025-10-03T13:41:13+10:00"
   }
 ]
 ```
+
+**Exclusive shares (Unraid 6.12+)**: with _Permit exclusive shares_ enabled,
+Unraid makes `/mnt/user/<share>` a symlink to `/mnt/<pool>/<share>` for shares
+that live on a single pool, so their I/O bypasses the FUSE user share layer.
+If a top-level folder for the share also exists on another pool or array disk,
+the share silently stays on FUSE.
+
+| Field                | Description                                                                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `exclusive`          | `true` when `/mnt/user/<share>` is a symlink (exclusive access)                                                                                              |
+| `exclusive_eligible` | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; before Unraid 7.2 also not NFS-exported)            |
+| `exclusive_pool`     | Pool the symlink points at (only when exclusive)                                                                                                             |
+| `locations`          | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive. Entries other than `cache_pool` keep the share on FUSE |
+
+The fields are omitted on releases without the setting and while the array is
+stopped. The check only uses `lstat`/`readlink` and never reads through FUSE.
 
 ---
 
