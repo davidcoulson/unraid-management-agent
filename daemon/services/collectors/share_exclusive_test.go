@@ -246,8 +246,8 @@ func TestApplyExclusiveStateNoDisksIni(t *testing.T) {
 	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false), poolOnly("downloads", "cache", false)}
 	p.applyExclusiveState(shares, nil)
 	for _, s := range shares {
-		if s.Exclusive == nil || *s.Exclusive || s.Locations != nil || s.LocationsUnchecked != nil {
-			t.Errorf("%s: want FUSE with locations unknown, got %+v", s.Name, s)
+		if s.Exclusive == nil || *s.Exclusive || s.ExclusiveEligible != nil || s.Locations != nil || s.LocationsUnchecked != nil {
+			t.Errorf("%s: want FUSE with eligibility unknown, got %+v", s.Name, s)
 		}
 	}
 }
@@ -338,6 +338,29 @@ func TestApplyExclusiveStatePoolsOnlyImplicitPool(t *testing.T) {
 	p.applyExclusiveState(shares, nil)
 	if deref(shares[0].ExclusiveEligible) != false || shares[0].ExclusivePool != "" {
 		t.Errorf("no pools: %+v", shares[0])
+	}
+}
+
+func TestApplyExclusiveStateRemovedPool(t *testing.T) {
+	p := exclusiveFixture(t, startedVarIni)
+	shares := []dto.ShareInfo{
+		poolOnly("appdata", "gone", false),
+		poolOnly("system", "gone", true), // exclusive: trusted as is
+	}
+	p.applyExclusiveState(shares, nil)
+	if s := shares[0]; deref(s.ExclusiveEligible) != false || s.ExclusivePool != "" || s.Locations != nil {
+		t.Errorf("removed pool: %+v", s)
+	}
+	if s := shares[1]; deref(s.ExclusiveEligible) != true || s.ExclusivePool != "gone" {
+		t.Errorf("exclusive share: %+v", s)
+	}
+}
+
+func TestPoolNames(t *testing.T) {
+	got := poolNames(parseINISections(exclusiveDisksIni))
+	want := map[string]bool{"cache": true, "slow": true, "scratch": true, "nvme": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("poolNames = %v, want %v", got, want)
 	}
 }
 
