@@ -10475,7 +10475,7 @@
                     "example": true
                 },
                 "exclusive_pool": {
-                    "description": "ExclusivePool is the pool the share's symlink points at when exclusive.",
+                    "description": "ExclusivePool is the share's pool for exclusive access: the symlink\ntarget when exclusive, otherwise the pool a pool-only share would be\nexclusive on (on pools-only servers this can be the implicit first pool).",
                     "type": "string",
                     "example": "cache"
                 },

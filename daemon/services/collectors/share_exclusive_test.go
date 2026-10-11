@@ -186,11 +186,11 @@ func TestApplyExclusiveState(t *testing.T) {
 		unchecked           []string
 	}{
 		{boolPtr(true), boolPtr(true), "cache", nil, nil},
-		{boolPtr(false), boolPtr(true), "", []string{"cache", "disk1"}, unchecked},
-		{boolPtr(false), boolPtr(true), "", []string{"cache"}, unchecked},
+		{boolPtr(false), boolPtr(true), "cache", []string{"cache", "disk1"}, unchecked},
+		{boolPtr(false), boolPtr(true), "cache", []string{"cache"}, unchecked},
 		{boolPtr(false), boolPtr(false), "", nil, nil},
 		{boolPtr(false), boolPtr(false), "", nil, nil},
-		{boolPtr(false), boolPtr(true), "", []string{}, unchecked},
+		{boolPtr(false), boolPtr(true), "cache", []string{}, unchecked},
 		{nil, nil, "", nil, nil},
 		{nil, nil, "", nil, nil},
 	}
@@ -311,6 +311,48 @@ func TestApplyExclusiveStatePoolsOnlyServer(t *testing.T) {
 		if deref(shares[2].ExclusiveEligible) != false {
 			t.Errorf("%q: share with a secondary pool reported eligible", tt.slots)
 		}
+	}
+}
+
+func TestApplyExclusiveStatePoolsOnlyImplicitPool(t *testing.T) {
+	p := exclusiveFixture(t, startedVarIni+"SYS_ARRAY_SLOTS=\"0\"\n")
+	shares := []dto.ShareInfo{
+		{Name: "appdata", UseCache: "yes", Exclusive: boolPtr(false)},
+		{Name: "system", UseCache: "no", Exclusive: boolPtr(true)},
+	}
+	p.applyExclusiveState(shares, nil)
+	for _, s := range shares {
+		if s.ExclusivePool != "cache" || deref(s.ExclusiveEligible) != true {
+			t.Errorf("%s: pool=%q eligible=%v, want cache true", s.Name, s.ExclusivePool, deref(s.ExclusiveEligible))
+		}
+	}
+	if !reflect.DeepEqual(locs(shares[0].Locations), []string{"cache", "disk1", "disk5"}) {
+		t.Errorf("appdata locations=%v", locs(shares[0].Locations))
+	}
+
+	// No pools at all: not pool-only, so not eligible.
+	if err := os.WriteFile(p.disksIni, []byte(`["disk1"]`+"\nidx=\"1\"\ntype=\"Data\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shares = []dto.ShareInfo{{Name: "appdata", UseCache: "yes", Exclusive: boolPtr(false)}}
+	p.applyExclusiveState(shares, nil)
+	if deref(shares[0].ExclusiveEligible) != false || shares[0].ExclusivePool != "" {
+		t.Errorf("no pools: %+v", shares[0])
+	}
+}
+
+func TestFirstPool(t *testing.T) {
+	disks := parseINISections(exclusiveDisksIni + `["early9"]
+idx="20"
+type="Cache"
+["noidx"]
+type="Cache"
+`)
+	if got := firstPool(disks); got != "early" {
+		t.Errorf("firstPool = %q, want early", got)
+	}
+	if got := firstPool(nil); got != "" {
+		t.Errorf("firstPool(nil) = %q", got)
 	}
 }
 

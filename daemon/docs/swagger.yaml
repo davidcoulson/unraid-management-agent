@@ -3339,8 +3339,10 @@ definitions:
         example: true
         type: boolean
       exclusive_pool:
-        description: ExclusivePool is the pool the share's symlink points at when
-          exclusive.
+        description: |-
+          ExclusivePool is the share's pool for exclusive access: the symlink
+          target when exclusive, otherwise the pool a pool-only share would be
+          exclusive on (on pools-only servers this can be the implicit first pool).
         example: cache
         type: string
       free_bytes:

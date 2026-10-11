@@ -37,7 +37,9 @@ type ShareInfo struct {
 	// before Unraid 7.2 also not exported over NFS). Omitted when that NFS
 	// rule applies but the share's config cannot be read.
 	ExclusiveEligible *bool `json:"exclusive_eligible,omitempty" example:"true"`
-	// ExclusivePool is the pool the share's symlink points at when exclusive.
+	// ExclusivePool is the share's pool for exclusive access: the symlink
+	// target when exclusive, otherwise the pool a pool-only share would be
+	// exclusive on (on pools-only servers this can be the implicit first pool).
 	ExclusivePool string `json:"exclusive_pool,omitempty" example:"cache"`
 	// Locations lists the pools and array disks holding a top-level folder for
 	// the share. Reported only when the share is eligible but not exclusive
