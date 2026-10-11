@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ZFS pool member drives with SMART health** — each pool in `/api/v1/zfs/pools`
+  (and the `zfs_pools_update` event) now has a `drives` list: every leaf member
+  with the whole disk it lives on (resolved through sysfs, including
+  device-mapper and by-id names), its vdev and state, and a `health` summary
+  from `smartctl -j -a -n standby`: model, protocol, media type, SMART status,
+  temperature, power-on hours, NVMe percentage used / available spare / critical
+  warning, and media errors (NVMe media errors, SCSI uncorrected errors or ATA
+  attribute 187). Readings are cached per disk for 5 minutes, at most 4 smartctl
+  runs happen at once (15 s timeout each), and drives in standby are not woken.
+  Serial numbers are never reported.
+  ([#227](https://github.com/tinkerologie/unraid-management-agent/issues/227))
+
 ### Changed
 - Configured Codecov GitHub Actions workflow for tokenless coverage uploads
 

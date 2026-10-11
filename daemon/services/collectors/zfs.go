@@ -20,13 +20,25 @@ import (
 type ZFSCollector struct {
 	ctx *domain.Context
 
-	// execOutput runs `zpool status`; injectable so tests can feed captured output.
+	// execOutput runs zpool; injectable so tests can feed captured output.
 	execOutput func(command string, args ...string) (string, error)
+
+	// sysRoot and devRoot locate sysfs and /dev for resolving pool members to
+	// disks; driveHealth caches their SMART data (nil disables it).
+	sysRoot     string
+	devRoot     string
+	driveHealth *driveHealthCache
 }
 
 // NewZFSCollector creates a new ZFS collector
 func NewZFSCollector(ctx *domain.Context) *ZFSCollector {
-	return &ZFSCollector{ctx: ctx, execOutput: lib.ExecCommandOutput}
+	return &ZFSCollector{
+		ctx:         ctx,
+		execOutput:  lib.ExecCommandOutput,
+		sysRoot:     "/sys",
+		devRoot:     "/dev",
+		driveHealth: newDriveHealthCache(),
+	}
 }
 
 // Start begins the ZFS collection loop
@@ -130,7 +142,7 @@ func (c *ZFSCollector) isZFSAvailable() bool {
 // collectPools collects information about all ZFS pools
 func (c *ZFSCollector) collectPools() ([]dto.ZFSPool, error) {
 	// Get list of pool names
-	output, err := lib.ExecCommandOutput(constants.ZpoolBin, "list", "-H", "-o", "name")
+	output, err := c.execOutput(constants.ZpoolBin, "list", "-H", "-o", "name")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pools: %w", err)
 	}
@@ -166,6 +178,8 @@ func (c *ZFSCollector) collectPools() ([]dto.ZFSPool, error) {
 		pools = append(pools, pool)
 	}
 
+	c.attachDrives(pools)
+
 	return pools, nil
 }
 
@@ -173,7 +187,7 @@ func (c *ZFSCollector) collectPools() ([]dto.ZFSPool, error) {
 func (c *ZFSCollector) collectPoolDetails(name string) (dto.ZFSPool, error) {
 	// Get basic pool info (parseable format)
 	// Fields: name, size, allocated, free, fragmentation, capacity, dedupratio, health, altroot
-	output, err := lib.ExecCommandOutput(constants.ZpoolBin, "list", "-Hp", "-o",
+	output, err := c.execOutput(constants.ZpoolBin, "list", "-Hp", "-o",
 		"name,size,allocated,free,fragmentation,capacity,dedupratio,health,altroot", name)
 	if err != nil {
 		return dto.ZFSPool{Name: name, Timestamp: time.Now()}, fmt.Errorf("failed to get pool info: %w", err)
@@ -255,7 +269,7 @@ func parseZPoolListOutput(output string) ([]dto.ZFSPool, error) {
 
 // enrichPoolProperties adds additional properties from 'zpool get all'
 func (c *ZFSCollector) enrichPoolProperties(pool *dto.ZFSPool) error {
-	output, err := lib.ExecCommandOutput(constants.ZpoolBin, "get", "-Hp", "-o", "property,value",
+	output, err := c.execOutput(constants.ZpoolBin, "get", "-Hp", "-o", "property,value",
 		"guid,readonly,autoexpand,autotrim", pool.Name)
 	if err != nil {
 		return err
