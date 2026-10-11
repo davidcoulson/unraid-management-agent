@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/constants"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/domain"
-	"github.com/ruaan-deysel/unraid-management-agent/daemon/dto"
+	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
 )
 
 // statOK makes the NUT plugin directory and PID file exist.
@@ -109,6 +109,66 @@ func TestNUTCollectorCollectSkipsFailingDevice(t *testing.T) {
 	}
 	if len(resp.Statuses) != 1 || resp.Statuses[0].DeviceName != "ats" {
 		t.Errorf("statuses = %+v, want only ats", resp.Statuses)
+	}
+}
+
+func TestNUTCollectorCollectStatusesConcurrently(t *testing.T) {
+	// The first device answers only once the last one has been queried, so a
+	// sequential loop would time it out. Results keep device order.
+	exec := fakeExec(map[string]string{
+		"upsc ups@localhost": upscSmartUPSX3000,
+		"upsc ats@localhost": upscAP7752ATS,
+	})
+	atsQueried := make(chan struct{})
+	c := newTestNUTCollector(nil)
+	c.execOutput = func(command string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-l localhost":
+			return "ups\nats\n", nil
+		case "ups@localhost":
+			select {
+			case <-atsQueried:
+			case <-time.After(time.Second):
+				return "", errors.New("ups queried before ats: devices are queried sequentially")
+			}
+		case "ats@localhost":
+			close(atsQueried)
+		}
+		return exec(command, args...)
+	}
+
+	resp := collectNUTResponse(t, c)
+
+	if len(resp.Statuses) != 2 || resp.Statuses[0].DeviceName != "ups" || resp.Statuses[1].DeviceName != "ats" {
+		t.Fatalf("statuses = %+v, want ups then ats", resp.Statuses)
+	}
+	if resp.Status != resp.Statuses[0] {
+		t.Errorf("status = %+v, want statuses[0]", resp.Status)
+	}
+}
+
+func TestNUTCollectorCollectStatusesRecoversPanic(t *testing.T) {
+	// A panicking query loses only that device; the rest keep their order.
+	exec := fakeExec(map[string]string{
+		"upsc -l localhost":  "ups\nups-gpu\nats\n",
+		"upsc ups@localhost": upscSmartUPSX3000,
+		"upsc ats@localhost": upscAP7752ATS,
+	})
+	c := newTestNUTCollector(nil)
+	c.execOutput = func(command string, args ...string) (string, error) {
+		if strings.Join(args, " ") == "ups-gpu@localhost" {
+			panic("boom")
+		}
+		return exec(command, args...)
+	}
+
+	resp := collectNUTResponse(t, c)
+
+	if len(resp.Statuses) != 2 || resp.Statuses[0].DeviceName != "ups" || resp.Statuses[1].DeviceName != "ats" {
+		t.Fatalf("statuses = %+v, want ups then ats", resp.Statuses)
+	}
+	if resp.Status != resp.Statuses[0] {
+		t.Errorf("status = %+v, want statuses[0]", resp.Status)
 	}
 }
 

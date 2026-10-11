@@ -2184,6 +2184,7 @@ Get UPS status and information.
 ```json
 {
   "connected": true,
+  "device_name": "ups",
   "status": "OL",
   "load_percent": null,
   "battery_charge_percent": 100,
