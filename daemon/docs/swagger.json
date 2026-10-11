@@ -10495,7 +10495,7 @@
                     ]
                 },
                 "locations_unchecked": {
-                    "description": "LocationsUnchecked lists the disks and pools that were not checked for a\nfolder because a device is spun down or its spin state is unknown, so\nthey are never woken. Reported alongside Locations.",
+                    "description": "LocationsUnchecked lists the disks and pools that were not checked for a\nfolder because a device is spun down, its spin state is unknown or the\ncheck failed, so they are never woken. Reported alongside Locations;\nboth are omitted when the disk list cannot be read.",
                     "type": "array",
                     "items": {
                         "type": "string"

@@ -42,8 +42,9 @@ type ShareInfo struct {
 	// any entry other than the share's pool is what keeps it on FUSE.
 	Locations []string `json:"locations,omitempty" example:"cache,disk1"`
 	// LocationsUnchecked lists the disks and pools that were not checked for a
-	// folder because a device is spun down or its spin state is unknown, so
-	// they are never woken. Reported alongside Locations.
+	// folder because a device is spun down, its spin state is unknown or the
+	// check failed, so they are never woken. Reported alongside Locations;
+	// both are omitted when the disk list cannot be read.
 	LocationsUnchecked []string `json:"locations_unchecked,omitempty" example:"disk3"`
 
 	// SourceStatus is non-nil only when the backing data source is not healthy.
