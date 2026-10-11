@@ -147,6 +147,31 @@ func TestNUTCollectorCollectStatusesConcurrently(t *testing.T) {
 	}
 }
 
+func TestNUTCollectorCollectStatusesRecoversPanic(t *testing.T) {
+	// A panicking query loses only that device; the rest keep their order.
+	exec := fakeExec(map[string]string{
+		"upsc -l localhost":  "ups\nups-gpu\nats\n",
+		"upsc ups@localhost": upscSmartUPSX3000,
+		"upsc ats@localhost": upscAP7752ATS,
+	})
+	c := newTestNUTCollector(nil)
+	c.execOutput = func(command string, args ...string) (string, error) {
+		if strings.Join(args, " ") == "ups-gpu@localhost" {
+			panic("boom")
+		}
+		return exec(command, args...)
+	}
+
+	resp := collectNUTResponse(t, c)
+
+	if len(resp.Statuses) != 2 || resp.Statuses[0].DeviceName != "ups" || resp.Statuses[1].DeviceName != "ats" {
+		t.Fatalf("statuses = %+v, want ups then ats", resp.Statuses)
+	}
+	if resp.Status != resp.Statuses[0] {
+		t.Errorf("status = %+v, want statuses[0]", resp.Status)
+	}
+}
+
 func TestNUTCollectorCollectNotInstalledOrNotRunning(t *testing.T) {
 	c := newTestNUTCollector(nil)
 	c.stat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }

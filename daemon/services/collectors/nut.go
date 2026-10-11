@@ -155,6 +155,12 @@ func (c *NUTCollector) collectStatuses(devices []dto.NUTDevice, host string) (*d
 	var wg sync.WaitGroup
 	for i, device := range devices {
 		wg.Go(func() {
+			// A panic here is outside Start's recover, so contain it per device.
+			defer func() {
+				if r := recover(); r != nil {
+					logger.LogPanicWithStack("NUT collector ("+device.Name+")", r)
+				}
+			}()
 			status, err := c.collectStatus(device.Name, host)
 			if err != nil {
 				logger.Warning("Failed to collect NUT status for %s: %v", device.Name, err)
