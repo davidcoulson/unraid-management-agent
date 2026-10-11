@@ -10497,7 +10497,7 @@ const docTemplate = `{
                     ]
                 },
                 "locations_unchecked": {
-                    "description": "LocationsUnchecked lists the disks and pools that were spun down and so\nnot checked for a folder, to avoid waking them. Reported alongside\nLocations.",
+                    "description": "LocationsUnchecked lists the disks and pools that were not checked for a\nfolder because a device is spun down or its spin state is unknown, so\nthey are never woken. Reported alongside Locations.",
                     "type": "array",
                     "items": {
                         "type": "string"

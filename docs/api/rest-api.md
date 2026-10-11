@@ -1471,7 +1471,7 @@ the share silently stays on FUSE.
 | `exclusive_eligible`  | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; before Unraid 7.2 also not NFS-exported)            |
 | `exclusive_pool`      | Pool the share's symlink points at (only when exclusive)                                                                                                     |
 | `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive. Entries other than `cache_pool` keep the share on FUSE |
-| `locations_unchecked` | Spun-down disks and pools (any device asleep) that were not checked, so the check never wakes a disk                                                         |
+| `locations_unchecked` | Disks and pools not checked because a device is spun down or its spin state is unknown, so the check never wakes a disk                                      |
 
 `exclusive` is the flag emhttp records in `shares.ini` when it sets up the
 symlink, so nothing under `/mnt/user` (FUSE) is accessed. The fields are

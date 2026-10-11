@@ -163,9 +163,10 @@ func releaseBefore(version string, major, minor int) bool {
 // file system.
 type storageBranch struct {
 	name string
-	// asleep is set when the disk, or any device of the pool, is spun down.
-	// Its folders are not probed so the check never wakes a disk.
-	asleep bool
+	// awake is set only when disks.ini reports every device of the disk or
+	// pool as spinning. Other branches are not probed, so the check never
+	// wakes a disk.
+	awake bool
 }
 
 // storageBranches returns the mounted array disks and pools that make up the
@@ -184,10 +185,10 @@ func (p sharePaths) storageBranches(settings exclusiveSettings) []storageBranch 
 
 	// Pool devices follow the pool entry in slot order, so a pool spans the
 	// idx range [idx, idx+slots).
-	spunDown := map[int]bool{}
+	spinning := map[int]bool{}
 	for _, kv := range sections {
 		if idx, err := strconv.Atoi(kv["idx"]); err == nil {
-			spunDown[idx] = kv["spundown"] == "1"
+			spinning[idx] = kv["spundown"] == "0"
 		}
 	}
 
@@ -212,37 +213,38 @@ func (p sharePaths) storageBranches(settings exclusiveSettings) []storageBranch 
 		default:
 			continue
 		}
-		branches = append(branches, storageBranch{name: name, asleep: branchAsleep(kv, spunDown)})
+		branches = append(branches, storageBranch{name: name, awake: branchAwake(kv, spinning)})
 	}
 	sort.Slice(branches, func(i, j int) bool { return branches[i].name < branches[j].name })
 	return branches
 }
 
-// branchAsleep reports whether a disk or any device of a pool is spun down.
-func branchAsleep(kv map[string]string, spunDown map[int]bool) bool {
+// branchAwake reports whether disks.ini shows the disk, or every device of
+// the pool, as spinning. Missing or unknown spin state counts as not awake.
+func branchAwake(kv map[string]string, spinning map[int]bool) bool {
 	idx, err := strconv.Atoi(kv["idx"])
 	if err != nil {
-		return kv["spundown"] == "1"
+		return false
 	}
 	slots, err := strconv.Atoi(kv["slots"])
 	if err != nil || slots < 1 {
 		slots = 1
 	}
 	for i := idx; i < idx+slots; i++ {
-		if spunDown[i] {
-			return true
+		if !spinning[i] {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // shareLocations lists the awake disks and pools holding a top-level folder
-// for the share (one lstat of /mnt/<branch>/<name> each) and the sleeping
-// ones that were left unchecked.
+// for the share (one lstat of /mnt/<branch>/<name> each) and the ones that
+// were left unchecked because they are spun down or their state is unknown.
 func (p sharePaths) shareLocations(branches []storageBranch, name string) (found, unchecked []string) {
 	found = []string{}
 	for _, branch := range branches {
-		if branch.asleep {
+		if !branch.awake {
 			unchecked = append(unchecked, branch.name)
 			continue
 		}
