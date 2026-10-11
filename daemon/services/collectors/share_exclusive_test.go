@@ -26,6 +26,7 @@ fsStatus="Mounted"
 idx="2"
 name="disk2"
 type="Data"
+spundown="0"
 fsStatus="Mounted"
 ["disk3"]
 idx="3"
@@ -41,6 +42,12 @@ fsStatus="Mounted"
 ["disk5"]
 idx="5"
 name="disk5"
+type="Data"
+spundown="0"
+fsStatus="Mounted"
+["disk6"]
+idx="6"
+name="disk6"
 type="Data"
 fsStatus="Mounted"
 ["cache"]
@@ -76,7 +83,9 @@ slots="0"
 fsStatus="Mounted"
 shareEnabled="no"
 ["nvme"]
+idx="40"
 type="Cache"
+spundown="0"
 fsStatus="Mounted"
 ["flash"]
 name="flash"
@@ -97,6 +106,7 @@ func exclusiveFixture(t *testing.T, varIni string) sharePaths {
 		"disk2",           // holds a file named appdata
 		"disk4/appdata",   // spun down: never probed
 		"disk5/appdata",   // excluded from user shares by var.ini
+		"disk6/appdata",   // spin state unknown: never probed
 		"slow/appdata",    // pool with a spun-down device: never probed
 		"scratch/appdata", // pool excluded from user shares
 		"cache2/appdata",  // pool member device, never a branch
@@ -158,7 +168,7 @@ func TestApplyExclusiveState(t *testing.T) {
 	}
 	p.applyExclusiveState(shares)
 
-	sleeping := []string{"disk4", "slow"}
+	unchecked := []string{"disk4", "disk6", "slow"}
 	want := []struct {
 		exclusive, eligible *bool
 		pool                string
@@ -166,11 +176,11 @@ func TestApplyExclusiveState(t *testing.T) {
 		unchecked           []string
 	}{
 		{boolPtr(true), boolPtr(true), "cache", nil, nil},
-		{boolPtr(false), boolPtr(true), "", []string{"cache", "disk1"}, sleeping},
-		{boolPtr(false), boolPtr(true), "", []string{"cache"}, sleeping},
+		{boolPtr(false), boolPtr(true), "", []string{"cache", "disk1"}, unchecked},
+		{boolPtr(false), boolPtr(true), "", []string{"cache"}, unchecked},
 		{boolPtr(false), boolPtr(false), "", nil, nil},
 		{boolPtr(false), boolPtr(false), "", nil, nil},
-		{boolPtr(false), boolPtr(true), "", []string{}, sleeping},
+		{boolPtr(false), boolPtr(true), "", []string{}, unchecked},
 		{nil, nil, "", nil, nil},
 		{nil, nil, "", nil, nil},
 	}
@@ -309,12 +319,23 @@ cachePool="cache"
 	}
 }
 
-func TestBranchAsleepWithoutIndex(t *testing.T) {
-	if !branchAsleep(map[string]string{"spundown": "1"}, nil) {
-		t.Error("disk without idx but spundown=1 should count as asleep")
-	}
-	if branchAsleep(map[string]string{"idx": "7"}, map[int]bool{}) {
-		t.Error("disk with no spin state should count as awake")
+func TestBranchAwake(t *testing.T) {
+	spinning := map[int]bool{1: true, 2: false, 3: true, 4: true}
+	for _, tt := range []struct {
+		kv   map[string]string
+		want bool
+	}{
+		{map[string]string{"idx": "1"}, true},
+		{map[string]string{"idx": "2"}, false},               // spun down
+		{map[string]string{"idx": "3", "slots": "2"}, true},  // pool 3-4
+		{map[string]string{"idx": "4", "slots": "2"}, false}, // member 5 unknown
+		{map[string]string{"idx": "9"}, false},               // no spin state
+		{map[string]string{"spundown": "0"}, false},          // no idx
+		{map[string]string{"idx": "1", "slots": "x"}, true},
+	} {
+		if got := branchAwake(tt.kv, spinning); got != tt.want {
+			t.Errorf("branchAwake(%v) = %v, want %v", tt.kv, got, tt.want)
+		}
 	}
 }
 

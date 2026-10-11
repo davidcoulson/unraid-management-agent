@@ -3369,9 +3369,9 @@ definitions:
         type: array
       locations_unchecked:
         description: |-
-          LocationsUnchecked lists the disks and pools that were spun down and so
-          not checked for a folder, to avoid waking them. Reported alongside
-          Locations.
+          LocationsUnchecked lists the disks and pools that were not checked for a
+          folder because a device is spun down or its spin state is unknown, so
+          they are never woken. Reported alongside Locations.
         example:
         - disk3
         items:

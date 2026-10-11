@@ -119,8 +119,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pool-only and, before Unraid 7.2, not NFS-exported), `exclusive_pool` and,
   when an eligible share has fallen back to FUSE, `locations` listing every
   pool or array disk that holds a top-level folder for it, so the stray copy
-  can be found (`locations_unchecked` names spun-down disks and pools that
-  were skipped so they are not woken). `exclusive` comes from emhttp's
+  can be found (`locations_unchecked` names disks and pools that were skipped
+  because they are spun down or their spin state is unknown, so they are
+  never woken). `exclusive` comes from emhttp's
   `shares.ini`, so nothing is read through FUSE; the fields are omitted on
   older releases and while the array is stopped.
 
