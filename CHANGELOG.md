@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Network cards: NIC temperatures and optic diagnostics** — new optional `nic` collector
+  (default every 60 s, `INTERVAL_NIC`, listed on the plugin settings page), REST endpoint
+  `GET /api/v1/network/cards`, WebSocket event `nic_update` and read-only MCP tool
+  `get_network_cards`. Reports one entry per PCI network card (ports grouped by PCI slot;
+  virtual interfaces, USB NICs, SR-IOV VFs and switchdev representors skipped) with
+  vendor, model, driver, firmware and hwmon temperatures (ASIC, PHY, MAC, module cages),
+  and per port the link state plus the plugged optic's identity and DDM decoded from
+  SFF-8472 (SFP, incl. external calibration) or SFF-8636/SFF-8436 (QSFP): module
+  temperature and voltage, per-lane laser bias and TX/RX power (mW and dBm), alarm and
+  warning flags and thresholds. Module EEPROMs are read with the `SIOCETHTOOL`
+  `ETHTOOL_GMODULEINFO`/`ETHTOOL_GMODULEEEPROM` ioctl, so no process is spawned per port
+  and cycle. Vendor serial numbers are never reported.
+  ([#225](https://github.com/tinkerologie/unraid-management-agent/issues/225))
+
 ### Changed
 - Configured Codecov GitHub Actions workflow for tokenless coverage uploads
 

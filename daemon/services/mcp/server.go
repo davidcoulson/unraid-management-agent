@@ -72,6 +72,7 @@ type CacheProvider interface {
 	GetOSUpdateCache() *dto.OSUpdateStatus
 	GetMoverCache() *dto.MoverStatus
 	GetStorageTopologyCache() *dto.StorageTopology
+	GetNICCache() *dto.NICList
 	// Logs
 	ListLogFiles() []dto.LogFile
 	GetLogContent(path, lines, start string) (*dto.LogFileContent, error)
@@ -1169,6 +1170,19 @@ func (s *Server) registerNewMonitoringTools() {
 			return jsonResult(cached)
 		}
 		return jsonResult(dto.NewPendingStorageTopology(time.Now()))
+	})
+
+	// Get network cards (cached hwmon temperatures and optic diagnostics)
+	addToolDirect(s, &mcp.Tool{
+		Name:        "get_network_cards",
+		Description: "Return the cached physical (PCI) network cards: per card the vendor, model, driver, firmware and hwmon temperatures (ASIC, PHY, MAC, module cages, with highest/critical limits); per port the interface, link state, speed, bond/bridge master and the plugged SFP/QSFP optic (identifier, connector, compliance, vendor name/part number, wavelength, module temperature and voltage, per-lane laser bias and TX/RX optical power in mW and dBm, active alarm/warning flags and thresholds). Serial numbers are never included. State is 'pending' until the nic collector has run.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ dto.MCPEmptyArgs) (*mcp.CallToolResult, any, error) {
+		logger.Info("MCP: Getting cached network cards")
+		if cached := s.cacheProvider.GetNICCache(); cached != nil {
+			return jsonResult(cached)
+		}
+		return jsonResult(dto.NewPendingNICList(time.Now()))
 	})
 
 	// Check plugin updates (returns cached result)
