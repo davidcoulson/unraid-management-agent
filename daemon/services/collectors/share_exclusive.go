@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"gopkg.in/ini.v1"
 
@@ -81,9 +82,17 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo, exportUnknown ma
 		return
 	}
 
-	// Loaded lazily: only needed for shares on FUSE.
+	// disks.ini is read lazily: only needed for shares on FUSE and for the
+	// implicit pool on pools-only servers.
+	var disks map[string]map[string]string
+	disksRead := false
+	loadDisks := func() map[string]map[string]string {
+		if !disksRead {
+			disks, disksRead = p.readDisks(), true
+		}
+		return disks
+	}
 	var branches []storageBranch
-	branchesLoaded := false
 	for i := range shares {
 		share := &shares[i]
 		if share.Exclusive == nil || validateShareName(share.Name) != nil {
@@ -91,14 +100,20 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo, exportUnknown ma
 			continue
 		}
 		exclusive := *share.Exclusive
-		if exclusive {
-			share.ExclusivePool = share.CachePool
-		}
+
 		// Pool-only: primary storage is a pool and there is no secondary
 		// storage. Without array slots Unraid treats any useCache value with
-		// no secondary pool as "only" (as the webGUI's share list does).
-		poolOnly := share.CachePool != "" && share.CachePool2 == "" &&
+		// no secondary pool as "only", and a share without a primary pool as
+		// being on the first pool (as the webGUI's share list does).
+		pool := share.CachePool
+		if pool == "" && settings.poolsOnly {
+			pool = firstPool(loadDisks())
+		}
+		poolOnly := pool != "" && share.CachePool2 == "" &&
 			(share.UseCache == "only" || settings.poolsOnly)
+		if exclusive || poolOnly {
+			share.ExclusivePool = pool
+		}
 		eligible := settings.enabled && poolOnly
 		if eligible && settings.nfsBlocks {
 			if exportUnknown[share.Name] {
@@ -109,8 +124,8 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo, exportUnknown ma
 		share.ExclusiveEligible = &eligible
 
 		if eligible && !exclusive {
-			if !branchesLoaded {
-				branches, branchesLoaded = p.storageBranches(settings), true
+			if branches == nil && loadDisks() != nil {
+				branches = storageBranches(loadDisks(), settings)
 			}
 			if branches != nil { // nil: disks.ini unreadable, locations unknown
 				found, unchecked := p.shareLocations(branches, share.Name)
@@ -118,6 +133,32 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo, exportUnknown ma
 			}
 		}
 	}
+}
+
+// readDisks parses disks.ini; nil when it cannot be read.
+func (p sharePaths) readDisks() map[string]map[string]string {
+	// #nosec G304 -- path is the fixed emhttp disks.ini (overridable only in tests)
+	data, err := os.ReadFile(p.disks())
+	if err != nil {
+		logger.Debug("Share: cannot read %s: %v", p.disks(), err)
+		return nil
+	}
+	return parseINISections(string(data))
+}
+
+// firstPool returns the pool the webGUI assigns to a share without a primary
+// pool on a pools-only server: the first pool in disks.ini order, named
+// without the member number suffix.
+func firstPool(disks map[string]map[string]string) string {
+	first, firstIdx := "", -1
+	for section, kv := range disks {
+		idx, err := strconv.Atoi(kv["idx"])
+		if kv["type"] != "Cache" || err != nil || (firstIdx >= 0 && idx >= firstIdx) {
+			continue
+		}
+		first, firstIdx = section, idx
+	}
+	return strings.TrimRightFunc(first, unicode.IsDigit)
 }
 
 // exclusiveSettings holds the var.ini settings the exclusive share check uses.
@@ -203,15 +244,7 @@ type storageBranch struct {
 // global included/excluded disk settings and mounted pools that are not
 // excluded from user shares. Pool member devices (cache2, ...) carry no
 // fsStatus and flash/parity entries have other types, so they never match.
-func (p sharePaths) storageBranches(settings exclusiveSettings) []storageBranch {
-	// #nosec G304 -- path is the fixed emhttp disks.ini (overridable only in tests)
-	data, err := os.ReadFile(p.disks())
-	if err != nil {
-		logger.Debug("Share: cannot read %s for share locations: %v", p.disks(), err)
-		return nil
-	}
-	sections := parseINISections(string(data))
-
+func storageBranches(sections map[string]map[string]string, settings exclusiveSettings) []storageBranch {
 	// Pool devices follow the pool entry in slot order, so a pool spans the
 	// idx range [idx, idx+slots).
 	spinning := map[int]bool{}

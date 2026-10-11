@@ -1453,6 +1453,7 @@ List all user shares.
     "cache_pool": "fast",
     "exclusive": false,
     "exclusive_eligible": true,
+    "exclusive_pool": "fast",
     "locations": ["disk1", "fast"],
     "timestamp": "2025-10-03T13:41:13+10:00"
   }
@@ -1469,8 +1470,8 @@ the share silently stays on FUSE.
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `exclusive`           | `true` when `/mnt/user/<share>` is a symlink (exclusive access)                                                                                                                                                                                                                                   |
 | `exclusive_eligible`  | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; on servers without array slots any primary pool with no secondary pool; before Unraid 7.2 also not NFS-exported). Omitted if that NFS rule applies but the share's config cannot be read |
-| `exclusive_pool`      | Pool the share's symlink points at (only when exclusive)                                                                                                                                                                                                                                          |
-| `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive (`[]` when none was found). Entries other than `cache_pool` keep the share on FUSE                                                                                                           |
+| `exclusive_pool`      | The share's pool: the symlink target when exclusive, otherwise the pool a pool-only share would be exclusive on                                                                                                                                                                                   |
+| `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive (`[]` when none was found). Entries other than `exclusive_pool` keep the share on FUSE                                                                                                       |
 | `locations_unchecked` | Disks and pools not checked because a device is spun down, its spin state is unknown or the check failed, so the check never wakes a disk                                                                                                                                                         |
 
 `exclusive` is the flag emhttp records in `shares.ini` when it sets up the

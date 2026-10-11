@@ -116,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payloads) now report Unraid 6.12+ exclusive share status per share:
   `exclusive` (`/mnt/user/<share>` is a symlink that bypasses FUSE),
   `exclusive_eligible` (exclusive shares are enabled and the share is
-  pool-only and, before Unraid 7.2, not NFS-exported), `exclusive_pool` and,
+  pool-only and, before Unraid 7.2, not NFS-exported), `exclusive_pool` (the share's pool) and,
   when an eligible share has fallen back to FUSE, `locations` listing every
   pool or array disk that holds a top-level folder for it, so the stray copy
   can be found (`locations_unchecked` names disks and pools that were skipped
