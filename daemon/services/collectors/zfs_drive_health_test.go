@@ -629,6 +629,15 @@ spundown="1"
 ["flash"]
 name="flash"
 device="sda"
+["odd"]
+device="sdb"
+spundown=""
+["odder"]
+device="sdc"
+spundown="2"
+["slotless"]
+device=""
+spundown="0"
 `
 	if err := os.WriteFile(path, []byte(ini), 0o644); err != nil {
 		t.Fatal(err)

@@ -59,7 +59,8 @@ type diskRef struct {
 // unraidSpinStates returns which disks Unraid reports as spun down, keyed
 // by kernel device name, from disks.ini. Unraid tracks spin state for every
 // array and pool device, including spin-downs from its UI, its timers and
-// this agent's API. Disks Unraid does not manage are absent.
+// this agent's API. Disks Unraid does not manage, and disks whose spundown
+// value is not "0" or "1", are absent.
 func unraidSpinStates(path string) map[string]bool {
 	cfg, err := ini.Load(path)
 	if err != nil {
@@ -68,10 +69,16 @@ func unraidSpinStates(path string) map[string]bool {
 	states := make(map[string]bool)
 	for _, section := range cfg.Sections() {
 		device := strings.Trim(section.Key("device").String(), `"`)
-		if device == "" || !section.HasKey("spundown") {
+		if device == "" {
 			continue
 		}
-		states[device] = strings.Trim(section.Key("spundown").String(), `"`) == "1"
+		switch strings.Trim(section.Key("spundown").String(), `"`) {
+		case "0":
+			states[device] = false
+		case "1":
+			states[device] = true
+		}
+		// Any other value (or none) leaves the disk out: its state is unknown.
 	}
 	return states
 }
