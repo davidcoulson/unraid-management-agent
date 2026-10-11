@@ -10467,7 +10467,7 @@ const docTemplate = `{
                     "example": "Media storage share"
                 },
                 "exclusive": {
-                    "description": "Exclusive is true when /mnt/user/\u003cname\u003e is a symlink to the pool, so\nshare I/O bypasses the FUSE user share layer (shfs).",
+                    "description": "Exclusive is true when /mnt/user/\u003cname\u003e is a symlink to the pool, so\nshare I/O bypasses the FUSE user share layer (shfs). Taken from the\nexclusive flag emhttp records in shares.ini.",
                     "type": "boolean",
                     "example": true
                 },
@@ -10477,7 +10477,7 @@ const docTemplate = `{
                     "example": true
                 },
                 "exclusive_pool": {
-                    "description": "ExclusivePool is the pool /mnt/user/\u003cname\u003e points at when exclusive.",
+                    "description": "ExclusivePool is the pool the share's symlink points at when exclusive.",
                     "type": "string",
                     "example": "cache"
                 },

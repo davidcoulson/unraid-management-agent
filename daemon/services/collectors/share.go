@@ -20,9 +20,9 @@ import (
 type ShareCollector struct {
 	ctx *domain.Context
 
-	// paths locates /mnt, var.ini and disks.ini for the exclusive share
-	// check; the zero value uses the production paths.
-	paths exclusivePaths
+	// paths locates shares.ini, var.ini, disks.ini and /mnt; the zero value
+	// uses the production paths.
+	paths sharePaths
 }
 
 // NewShareCollector creates a new user share collector with the given context.
@@ -104,10 +104,10 @@ func (c *ShareCollector) Collect(ctx context.Context) {
 	// A read error → unavailable (return without publishing); zero parsed shares → degraded
 	// but still publish best-effort; otherwise report healthy.
 	if c.ctx.Platform != nil {
-		f, openErr := os.Open(constants.SharesIni)
+		f, openErr := os.Open(c.paths.shares())
 		if openErr != nil {
 			c.ctx.Platform.Report("shares", dto.SourceUnavailable, "cannot read shares.ini", openErr)
-			logger.Error("Share: Failed to open %s: %v", constants.SharesIni, openErr)
+			logger.Error("Share: Failed to open %s: %v", c.paths.shares(), openErr)
 			return // nothing valid to publish
 		}
 		_ = f.Close()
@@ -143,11 +143,11 @@ func (c *ShareCollector) Collect(ctx context.Context) {
 func (c *ShareCollector) collectShares(ctx context.Context) ([]dto.ShareInfo, error) {
 	const kibToBytes uint64 = 1024
 
-	logger.Debug("Share: Starting collection from %s", constants.SharesIni)
+	logger.Debug("Share: Starting collection from %s", c.paths.shares())
 	var shares []dto.ShareInfo
 
 	// Parse shares.ini
-	file, err := os.Open(constants.SharesIni)
+	file, err := os.Open(c.paths.shares())
 	if err != nil {
 		logger.Error("Share: Failed to open file: %v", err)
 		return nil, err
@@ -221,6 +221,11 @@ func (c *ShareCollector) collectShares(ctx context.Context) ([]dto.ShareInfo, er
 				currentShare.CachePool = value
 			case "cachePool2":
 				currentShare.CachePool2 = value
+			case "exclusive":
+				// Set by emhttp (6.12+) once /mnt/user/<share> is a symlink
+				// to the pool; completed by applyExclusiveState.
+				exclusive := value == "yes"
+				currentShare.Exclusive = &exclusive
 			}
 		}
 	}

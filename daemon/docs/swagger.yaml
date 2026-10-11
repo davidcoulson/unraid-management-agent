@@ -3325,7 +3325,8 @@ definitions:
       exclusive:
         description: |-
           Exclusive is true when /mnt/user/<name> is a symlink to the pool, so
-          share I/O bypasses the FUSE user share layer (shfs).
+          share I/O bypasses the FUSE user share layer (shfs). Taken from the
+          exclusive flag emhttp records in shares.ini.
         example: true
         type: boolean
       exclusive_eligible:
@@ -3336,7 +3337,8 @@ definitions:
         example: true
         type: boolean
       exclusive_pool:
-        description: ExclusivePool is the pool /mnt/user/<name> points at when exclusive.
+        description: ExclusivePool is the pool the share's symlink points at when
+          exclusive.
         example: cache
         type: string
       free_bytes:

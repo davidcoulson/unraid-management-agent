@@ -1,11 +1,13 @@
 package collectors
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
 	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
 )
 
@@ -82,29 +84,25 @@ type="Boot"
 fsStatus="Mounted"
 `
 
+const startedVarIni = "shareUser=\"e\"\nfsState=\"Started\"\nshareUserExclusive=\"yes\"\n"
+
 // exclusiveFixture builds a fake /mnt tree, var.ini and disks.ini in a temp dir.
-func exclusiveFixture(t *testing.T, varIni string) exclusivePaths {
+func exclusiveFixture(t *testing.T, varIni string) sharePaths {
 	t.Helper()
 	root := t.TempDir()
 	mnt := filepath.Join(root, "mnt")
 	for _, dir := range []string{
-		"user/media",       // FUSE share (not eligible)
-		"user/appdata",     // FUSE fallback: stray folder on disk1
-		"cache/appdata",    // primary pool copy
-		"disk1/appdata",    // stray copy
-		"disk2",            // holds a file named appdata
-		"cache/system",     // target of an exclusive symlink
-		"nvme/vms",         // target of an exclusive symlink
-		"cache2/appdata",   // pool member device, never a branch
-		"flash/appdata",    // boot device, never a branch
-		"disk3/appdata",    // unmountable disk, never a branch
-		"disk4/appdata",    // spun down: never probed
-		"disk5/appdata",    // excluded from user shares by var.ini
-		"slow/appdata",     // pool with a spun-down device: never probed
-		"scratch/appdata",  // pool excluded from user shares
-		"cache/downloads",  // FUSE fallback with no stray folder found
-		"user/downloads",   // ...
-		"elsewhere/other1", // odd symlink target
+		"cache/appdata",   // primary pool copy
+		"disk1/appdata",   // stray copy
+		"disk2",           // holds a file named appdata
+		"disk4/appdata",   // spun down: never probed
+		"disk5/appdata",   // excluded from user shares by var.ini
+		"slow/appdata",    // pool with a spun-down device: never probed
+		"scratch/appdata", // pool excluded from user shares
+		"cache2/appdata",  // pool member device, never a branch
+		"flash/appdata",   // boot device, never a branch
+		"disk3/appdata",   // unmountable disk, never a branch
+		"cache/downloads", // FUSE fallback with no stray folder found
 	} {
 		if err := os.MkdirAll(filepath.Join(mnt, dir), 0o755); err != nil {
 			t.Fatal(err)
@@ -114,20 +112,12 @@ func exclusiveFixture(t *testing.T, varIni string) exclusivePaths {
 	if err := os.WriteFile(filepath.Join(mnt, "disk2", "appdata"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for link, target := range map[string]string{
-		"system": "../cache/system",
-		"vms":    filepath.Join(mnt, "nvme", "vms"),
-		"other":  "../elsewhere/other1/deeper",
-	} {
-		if err := os.Symlink(target, filepath.Join(mnt, "user", link)); err != nil {
-			t.Fatal(err)
-		}
-	}
 
-	p := exclusivePaths{
-		mntRoot:  mnt,
-		varIni:   filepath.Join(root, "var.ini"),
-		disksIni: filepath.Join(root, "disks.ini"),
+	p := sharePaths{
+		mntRoot:   mnt,
+		sharesIni: filepath.Join(root, "shares.ini"),
+		varIni:    filepath.Join(root, "var.ini"),
+		disksIni:  filepath.Join(root, "disks.ini"),
 	}
 	if err := os.WriteFile(p.disksIni, []byte(exclusiveDisksIni), 0o600); err != nil {
 		t.Fatal(err)
@@ -140,24 +130,31 @@ func exclusiveFixture(t *testing.T, varIni string) exclusivePaths {
 	return p
 }
 
-func poolOnly(name, pool string) dto.ShareInfo {
-	return dto.ShareInfo{Name: name, UseCache: "only", CachePool: pool}
-}
-
 func boolPtr(b bool) *bool { return &b }
 
+// poolOnly returns a pool-only share with the shares.ini exclusive flag.
+func poolOnly(name, pool string, exclusive bool) dto.ShareInfo {
+	return dto.ShareInfo{Name: name, UseCache: "only", CachePool: pool, Exclusive: boolPtr(exclusive)}
+}
+
+func deref(b *bool) any {
+	if b == nil {
+		return nil
+	}
+	return *b
+}
+
 func TestApplyExclusiveState(t *testing.T) {
-	p := exclusiveFixture(t, "shareUser=\"e\"\nshareUserExclusive=\"yes\"\nshareUserExclude=\"disk5, disk9\"\n")
+	p := exclusiveFixture(t, startedVarIni+"shareUserExclude=\"disk5, disk9\"\n")
 	shares := []dto.ShareInfo{
-		poolOnly("system", "cache"),
-		poolOnly("vms", "nvme"),
-		poolOnly("appdata", "cache"),
-		poolOnly("downloads", "cache"),
-		{Name: "media", UseCache: "yes", CachePool: "cache"},
-		{Name: "backup", UseCache: "only", CachePool: "cache", CachePool2: "disk1"},
-		poolOnly("missing", "cache"),
-		poolOnly("other", "cache"),
-		poolOnly("../escape", "cache"),
+		poolOnly("system", "cache", true),
+		poolOnly("appdata", "cache", false),
+		poolOnly("downloads", "cache", false),
+		{Name: "media", UseCache: "yes", CachePool: "cache", Exclusive: boolPtr(false)},
+		{Name: "backup", UseCache: "only", CachePool: "cache", CachePool2: "disk1", Exclusive: boolPtr(false)},
+		poolOnly("missing", "cache", false),
+		{Name: "old", UseCache: "only", CachePool: "cache"}, // no exclusive key in shares.ini
+		poolOnly("../escape", "cache", false),
 	}
 	p.applyExclusiveState(shares)
 
@@ -169,13 +166,12 @@ func TestApplyExclusiveState(t *testing.T) {
 		unchecked           []string
 	}{
 		{boolPtr(true), boolPtr(true), "cache", nil, nil},
-		{boolPtr(true), boolPtr(true), "nvme", nil, nil},
 		{boolPtr(false), boolPtr(true), "", []string{"cache", "disk1"}, sleeping},
 		{boolPtr(false), boolPtr(true), "", []string{"cache"}, sleeping},
 		{boolPtr(false), boolPtr(false), "", nil, nil},
 		{boolPtr(false), boolPtr(false), "", nil, nil},
 		{boolPtr(false), boolPtr(true), "", []string{}, sleeping},
-		{boolPtr(true), boolPtr(true), "", nil, nil},
+		{nil, nil, "", nil, nil},
 		{nil, nil, "", nil, nil},
 	}
 	for i, w := range want {
@@ -193,16 +189,9 @@ func TestApplyExclusiveState(t *testing.T) {
 	}
 }
 
-func deref(b *bool) any {
-	if b == nil {
-		return nil
-	}
-	return *b
-}
-
 func TestApplyExclusiveStateGloballyDisabled(t *testing.T) {
-	p := exclusiveFixture(t, "shareUserExclusive=\"no\"\n")
-	shares := []dto.ShareInfo{poolOnly("appdata", "cache")}
+	p := exclusiveFixture(t, "shareUser=\"e\"\nfsState=\"Started\"\nshareUserExclusive=\"no\"\n")
+	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false)}
 	p.applyExclusiveState(shares)
 	if shares[0].Exclusive == nil || *shares[0].Exclusive || shares[0].ExclusiveEligible == nil || *shares[0].ExclusiveEligible {
 		t.Fatalf("want exclusive=false eligible=false, got %+v", shares[0])
@@ -213,24 +202,16 @@ func TestApplyExclusiveStateGloballyDisabled(t *testing.T) {
 }
 
 func TestApplyExclusiveStateUnavailable(t *testing.T) {
-	tests := map[string]func(t *testing.T) exclusivePaths{
-		"no var.ini": func(t *testing.T) exclusivePaths { return exclusiveFixture(t, "") },
-		"pre-6.12 var.ini": func(t *testing.T) exclusivePaths {
-			return exclusiveFixture(t, "shareUser=\"e\"\n")
-		},
-		"user shares not mounted": func(t *testing.T) exclusivePaths {
-			p := exclusiveFixture(t, "shareUserExclusive=\"yes\"\n")
-			if err := os.RemoveAll(filepath.Join(p.mntRoot, "user")); err != nil {
-				t.Fatal(err)
-			}
-			return p
-		},
-	}
-	for name, setup := range tests {
+	for name, varIni := range map[string]string{
+		"no var.ini":           "",
+		"pre-6.12 var.ini":     "shareUser=\"e\"\nfsState=\"Started\"\n",
+		"array stopped":        "shareUser=\"e\"\nfsState=\"Stopped\"\nshareUserExclusive=\"yes\"\n",
+		"user shares disabled": "shareUser=\"-\"\nfsState=\"Started\"\nshareUserExclusive=\"yes\"\n",
+	} {
 		t.Run(name, func(t *testing.T) {
-			shares := []dto.ShareInfo{poolOnly("system", "cache")}
-			setup(t).applyExclusiveState(shares)
-			if shares[0].Exclusive != nil || shares[0].ExclusiveEligible != nil {
+			shares := []dto.ShareInfo{poolOnly("system", "cache", true)}
+			exclusiveFixture(t, varIni).applyExclusiveState(shares)
+			if shares[0].Exclusive != nil || shares[0].ExclusiveEligible != nil || shares[0].ExclusivePool != "" {
 				t.Errorf("fields set although state is unknown: %+v", shares[0])
 			}
 		})
@@ -238,40 +219,22 @@ func TestApplyExclusiveStateUnavailable(t *testing.T) {
 }
 
 func TestApplyExclusiveStateNoDisksIni(t *testing.T) {
-	p := exclusiveFixture(t, "shareUserExclusive=\"yes\"\n")
+	p := exclusiveFixture(t, startedVarIni)
 	if err := os.Remove(p.disksIni); err != nil {
 		t.Fatal(err)
 	}
-	shares := []dto.ShareInfo{poolOnly("appdata", "cache"), poolOnly("downloads", "cache")}
+	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false), poolOnly("downloads", "cache", false)}
 	p.applyExclusiveState(shares)
 	for _, s := range shares {
-		if s.Exclusive == nil || *s.Exclusive || len(s.Locations) != 0 {
+		if s.Exclusive == nil || *s.Exclusive || len(s.Locations) != 0 || len(s.LocationsUnchecked) != 0 {
 			t.Errorf("%s: want FUSE with no known locations, got %+v", s.Name, s)
 		}
 	}
 }
 
-func TestApplyExclusiveStateLstatError(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks do not apply to root")
-	}
-	p := exclusiveFixture(t, "shareUserExclusive=\"yes\"\n")
-	userRoot := filepath.Join(p.mntRoot, "user")
-	if err := os.Chmod(userRoot, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(userRoot, 0o755) }) // #nosec G302 -- restore test dir for cleanup
-
-	shares := []dto.ShareInfo{poolOnly("system", "cache")}
-	p.applyExclusiveState(shares)
-	if shares[0].Exclusive != nil {
-		t.Errorf("exclusive reported although /mnt/user/system could not be inspected: %v", *shares[0].Exclusive)
-	}
-}
-
 func TestApplyExclusiveStateIncludedDisks(t *testing.T) {
-	p := exclusiveFixture(t, "shareUserExclusive=\"yes\"\nshareUserInclude=\"disk5\"\n")
-	shares := []dto.ShareInfo{poolOnly("appdata", "cache")}
+	p := exclusiveFixture(t, startedVarIni+"shareUserInclude=\"disk5\"\n")
+	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false)}
 	p.applyExclusiveState(shares)
 	// disk1 is not in the included disks; pools are unaffected.
 	if want := []string{"cache", "disk5"}; !reflect.DeepEqual(shares[0].Locations, want) {
@@ -279,17 +242,8 @@ func TestApplyExclusiveStateIncludedDisks(t *testing.T) {
 	}
 }
 
-func TestBranchAsleepWithoutIndex(t *testing.T) {
-	if !branchAsleep(map[string]string{"spundown": "1"}, nil) {
-		t.Error("disk without idx but spundown=1 should count as asleep")
-	}
-	if branchAsleep(map[string]string{"idx": "7"}, map[int]bool{}) {
-		t.Error("disk with no spin state should count as awake")
-	}
-}
-
 func TestApplyExclusiveStateNFSBeforeRelease72(t *testing.T) {
-	nfsShare := poolOnly("appdata", "cache")
+	nfsShare := poolOnly("appdata", "cache", false)
 	nfsShare.NFSExport = true
 	for _, tt := range []struct {
 		version  string
@@ -300,8 +254,8 @@ func TestApplyExclusiveStateNFSBeforeRelease72(t *testing.T) {
 		{"7.2.0-rc.1", true},
 		{"7.4.0", true},
 	} {
-		p := exclusiveFixture(t, "shareUserExclusive=\"yes\"\nversion=\""+tt.version+"\"\n")
-		shares := []dto.ShareInfo{nfsShare, poolOnly("downloads", "cache")}
+		p := exclusiveFixture(t, startedVarIni+"version=\""+tt.version+"\"\n")
+		shares := []dto.ShareInfo{nfsShare, poolOnly("downloads", "cache", false)}
 		p.applyExclusiveState(shares)
 		if got := *shares[0].ExclusiveEligible; got != tt.eligible {
 			t.Errorf("%s: NFS share eligible=%v, want %v", tt.version, got, tt.eligible)
@@ -309,6 +263,58 @@ func TestApplyExclusiveStateNFSBeforeRelease72(t *testing.T) {
 		if !*shares[1].ExclusiveEligible {
 			t.Errorf("%s: non-NFS share not eligible", tt.version)
 		}
+	}
+}
+
+// TestCollectSharesExclusiveFlag runs the shares.ini parser end to end on
+// the format emhttp writes on Unraid 7.4.
+func TestCollectSharesExclusiveFlag(t *testing.T) {
+	p := exclusiveFixture(t, startedVarIni)
+	sharesIni := `["system"]
+name="system"
+useCache="only"
+cachePool="cache"
+cachePool2=""
+exclusive="yes"
+["appdata"]
+name="appdata"
+useCache="only"
+cachePool="cache"
+cachePool2=""
+exclusive="no"
+["old"]
+name="old"
+useCache="only"
+cachePool="cache"
+`
+	if err := os.WriteFile(p.sharesIni, []byte(sharesIni), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &ShareCollector{ctx: &domain.Context{}, paths: p}
+	shares, err := c.collectShares(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shares) != 3 {
+		t.Fatalf("got %d shares, want 3", len(shares))
+	}
+	if s := shares[0]; deref(s.Exclusive) != true || s.ExclusivePool != "cache" || deref(s.ExclusiveEligible) != true {
+		t.Errorf("system: %+v", s)
+	}
+	if s := shares[1]; deref(s.Exclusive) != false || !reflect.DeepEqual(s.Locations, []string{"cache", "disk1", "disk5"}) {
+		t.Errorf("appdata: %+v", s)
+	}
+	if s := shares[2]; s.Exclusive != nil || s.ExclusiveEligible != nil {
+		t.Errorf("old: %+v", s)
+	}
+}
+
+func TestBranchAsleepWithoutIndex(t *testing.T) {
+	if !branchAsleep(map[string]string{"spundown": "1"}, nil) {
+		t.Error("disk without idx but spundown=1 should count as asleep")
+	}
+	if branchAsleep(map[string]string{"idx": "7"}, map[int]bool{}) {
+		t.Error("disk with no spin state should count as awake")
 	}
 }
 
@@ -331,9 +337,10 @@ func TestReleaseBefore(t *testing.T) {
 	}
 }
 
-func TestExclusivePathsDefaults(t *testing.T) {
-	var p exclusivePaths
-	if p.mnt() != "/mnt" || p.vars() != "/var/local/emhttp/var.ini" || p.disks() != "/var/local/emhttp/disks.ini" {
-		t.Errorf("unexpected defaults: %s %s %s", p.mnt(), p.vars(), p.disks())
+func TestSharePathsDefaults(t *testing.T) {
+	var p sharePaths
+	if p.mnt() != "/mnt" || p.shares() != "/var/local/emhttp/shares.ini" ||
+		p.vars() != "/var/local/emhttp/var.ini" || p.disks() != "/var/local/emhttp/disks.ini" {
+		t.Errorf("unexpected defaults: %s %s %s %s", p.mnt(), p.shares(), p.vars(), p.disks())
 	}
 }
