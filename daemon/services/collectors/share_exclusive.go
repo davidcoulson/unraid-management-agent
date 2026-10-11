@@ -1,6 +1,8 @@
 package collectors
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -76,7 +78,9 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo) {
 		return
 	}
 
-	var branches []storageBranch // loaded lazily: only needed for shares on FUSE
+	// Loaded lazily: only needed for shares on FUSE.
+	var branches []storageBranch
+	branchesLoaded := false
 	for i := range shares {
 		share := &shares[i]
 		if share.Exclusive == nil || validateShareName(share.Name) != nil {
@@ -92,10 +96,12 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo) {
 		}
 
 		if eligible && !exclusive {
-			if branches == nil {
-				branches = p.storageBranches(settings)
+			if !branchesLoaded {
+				branches, branchesLoaded = p.storageBranches(settings), true
 			}
-			share.Locations, share.LocationsUnchecked = p.shareLocations(branches, share.Name)
+			if branches != nil { // nil: disks.ini unreadable, locations unknown
+				share.Locations, share.LocationsUnchecked = p.shareLocations(branches, share.Name)
+			}
 		}
 	}
 }
@@ -179,7 +185,7 @@ func (p sharePaths) storageBranches(settings exclusiveSettings) []storageBranch 
 	data, err := os.ReadFile(p.disks())
 	if err != nil {
 		logger.Debug("Share: cannot read %s for share locations: %v", p.disks(), err)
-		return []storageBranch{}
+		return nil
 	}
 	sections := parseINISections(string(data))
 
@@ -213,22 +219,25 @@ func (p sharePaths) storageBranches(settings exclusiveSettings) []storageBranch 
 		default:
 			continue
 		}
-		branches = append(branches, storageBranch{name: name, awake: branchAwake(kv, spinning)})
+		branches = append(branches, storageBranch{name: name, awake: branchAwake(kv, spinning, kv["type"] == "Cache")})
 	}
 	sort.Slice(branches, func(i, j int) bool { return branches[i].name < branches[j].name })
 	return branches
 }
 
 // branchAwake reports whether disks.ini shows the disk, or every device of
-// the pool, as spinning. Missing or unknown spin state counts as not awake.
-func branchAwake(kv map[string]string, spinning map[int]bool) bool {
+// the pool, as spinning. Missing or unknown spin state, or a pool whose
+// device count is unknown, counts as not awake.
+func branchAwake(kv map[string]string, spinning map[int]bool, pool bool) bool {
 	idx, err := strconv.Atoi(kv["idx"])
 	if err != nil {
 		return false
 	}
-	slots, err := strconv.Atoi(kv["slots"])
-	if err != nil || slots < 1 {
-		slots = 1
+	slots := 1
+	if pool {
+		if slots, err = strconv.Atoi(kv["slots"]); err != nil || slots < 1 {
+			return false
+		}
 	}
 	for i := idx; i < idx+slots; i++ {
 		if !spinning[i] {
@@ -240,7 +249,8 @@ func branchAwake(kv map[string]string, spinning map[int]bool) bool {
 
 // shareLocations lists the awake disks and pools holding a top-level folder
 // for the share (one lstat of /mnt/<branch>/<name> each) and the ones that
-// were left unchecked because they are spun down or their state is unknown.
+// were left unchecked because they are spun down, their state is unknown or
+// the check failed.
 func (p sharePaths) shareLocations(branches []storageBranch, name string) (found, unchecked []string) {
 	found = []string{}
 	for _, branch := range branches {
@@ -248,9 +258,17 @@ func (p sharePaths) shareLocations(branches []storageBranch, name string) (found
 			unchecked = append(unchecked, branch.name)
 			continue
 		}
-		info, err := os.Lstat(filepath.Join(p.mnt(), branch.name, name))
-		if err == nil && info.IsDir() {
-			found = append(found, branch.name)
+		path := filepath.Join(p.mnt(), branch.name, name)
+		info, err := os.Lstat(path)
+		switch {
+		case err == nil:
+			if info.IsDir() {
+				found = append(found, branch.name)
+			}
+		case errors.Is(err, fs.ErrNotExist):
+		default:
+			logger.Debug("Share: cannot check %s: %v", path, err)
+			unchecked = append(unchecked, branch.name)
 		}
 	}
 	return found, unchecked

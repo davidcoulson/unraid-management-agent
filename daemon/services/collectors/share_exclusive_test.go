@@ -84,6 +84,7 @@ fsStatus="Mounted"
 shareEnabled="no"
 ["nvme"]
 idx="40"
+slots="1"
 type="Cache"
 spundown="0"
 fsStatus="Mounted"
@@ -236,9 +237,30 @@ func TestApplyExclusiveStateNoDisksIni(t *testing.T) {
 	shares := []dto.ShareInfo{poolOnly("appdata", "cache", false), poolOnly("downloads", "cache", false)}
 	p.applyExclusiveState(shares)
 	for _, s := range shares {
-		if s.Exclusive == nil || *s.Exclusive || len(s.Locations) != 0 || len(s.LocationsUnchecked) != 0 {
-			t.Errorf("%s: want FUSE with no known locations, got %+v", s.Name, s)
+		if s.Exclusive == nil || *s.Exclusive || s.Locations != nil || s.LocationsUnchecked != nil {
+			t.Errorf("%s: want FUSE with locations unknown, got %+v", s.Name, s)
 		}
+	}
+}
+
+func TestShareLocationsProbeError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks do not apply to root")
+	}
+	p := exclusiveFixture(t, startedVarIni)
+	disk1 := filepath.Join(p.mntRoot, "disk1")
+	if err := os.Chmod(disk1, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(disk1, 0o755) }) // #nosec G302 -- restore test dir for cleanup
+
+	found, unchecked := p.shareLocations([]storageBranch{
+		{name: "cache", awake: true},
+		{name: "disk1", awake: true},
+		{name: "disk2", awake: true},
+	}, "appdata")
+	if !reflect.DeepEqual(found, []string{"cache"}) || !reflect.DeepEqual(unchecked, []string{"disk1"}) {
+		t.Errorf("found=%v unchecked=%v, want [cache] [disk1]", found, unchecked)
 	}
 }
 
@@ -323,18 +345,22 @@ func TestBranchAwake(t *testing.T) {
 	spinning := map[int]bool{1: true, 2: false, 3: true, 4: true}
 	for _, tt := range []struct {
 		kv   map[string]string
+		pool bool
 		want bool
 	}{
-		{map[string]string{"idx": "1"}, true},
-		{map[string]string{"idx": "2"}, false},               // spun down
-		{map[string]string{"idx": "3", "slots": "2"}, true},  // pool 3-4
-		{map[string]string{"idx": "4", "slots": "2"}, false}, // member 5 unknown
-		{map[string]string{"idx": "9"}, false},               // no spin state
-		{map[string]string{"spundown": "0"}, false},          // no idx
-		{map[string]string{"idx": "1", "slots": "x"}, true},
+		{map[string]string{"idx": "1"}, false, true},
+		{map[string]string{"idx": "1", "slots": "x"}, false, true}, // disks ignore slots
+		{map[string]string{"idx": "2"}, false, false},              // spun down
+		{map[string]string{"idx": "9"}, false, false},              // no spin state
+		{map[string]string{"spundown": "0"}, false, false},         // no idx
+		{map[string]string{"idx": "3", "slots": "2"}, true, true},  // pool 3-4
+		{map[string]string{"idx": "4", "slots": "2"}, true, false}, // member 5 unknown
+		{map[string]string{"idx": "3"}, true, false},               // pool size unknown
+		{map[string]string{"idx": "3", "slots": "0"}, true, false},
+		{map[string]string{"idx": "3", "slots": "x"}, true, false},
 	} {
-		if got := branchAwake(tt.kv, spinning); got != tt.want {
-			t.Errorf("branchAwake(%v) = %v, want %v", tt.kv, got, tt.want)
+		if got := branchAwake(tt.kv, spinning, tt.pool); got != tt.want {
+			t.Errorf("branchAwake(%v, pool=%v) = %v, want %v", tt.kv, tt.pool, got, tt.want)
 		}
 	}
 }

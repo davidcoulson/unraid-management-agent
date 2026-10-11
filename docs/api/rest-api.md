@@ -1471,13 +1471,14 @@ the share silently stays on FUSE.
 | `exclusive_eligible`  | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; before Unraid 7.2 also not NFS-exported)            |
 | `exclusive_pool`      | Pool the share's symlink points at (only when exclusive)                                                                                                     |
 | `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive. Entries other than `cache_pool` keep the share on FUSE |
-| `locations_unchecked` | Disks and pools not checked because a device is spun down or its spin state is unknown, so the check never wakes a disk                                      |
+| `locations_unchecked` | Disks and pools not checked because a device is spun down, its spin state is unknown or the check failed, so the check never wakes a disk                    |
 
 `exclusive` is the flag emhttp records in `shares.ini` when it sets up the
 symlink, so nothing under `/mnt/user` (FUSE) is accessed. The fields are
 omitted on releases without the setting, while the array is stopped and when
 user shares are disabled. `locations` comes from one `lstat` of
-`/mnt/<disk or pool>/<share>` per branch. Only disks and pools that take part in user shares are checked: array disks
+`/mnt/<disk or pool>/<share>` per branch; both lists are omitted if the
+disk list (`disks.ini`) cannot be read. Only disks and pools that take part in user shares are checked: array disks
 allowed by the global included/excluded disk settings and pools whose user
 share participation is not disabled.
 

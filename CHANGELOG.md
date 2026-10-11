@@ -120,8 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when an eligible share has fallen back to FUSE, `locations` listing every
   pool or array disk that holds a top-level folder for it, so the stray copy
   can be found (`locations_unchecked` names disks and pools that were skipped
-  because they are spun down or their spin state is unknown, so they are
-  never woken). `exclusive` comes from emhttp's
+  because they are spun down, their spin state is unknown or the check
+  failed, so they are never woken). `exclusive` comes from emhttp's
   `shares.ini`, so nothing is read through FUSE; the fields are omitted on
   older releases and while the array is stopped.
 
