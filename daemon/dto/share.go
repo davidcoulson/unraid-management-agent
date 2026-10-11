@@ -25,16 +25,17 @@ type ShareInfo struct {
 	MoverAction string `json:"mover_action,omitempty" example:"cache->array"` // Mover action: "cache->array", "array->cache", or empty
 
 	// Exclusive share state (Unraid 6.12+). These fields are omitted when the
-	// release has no exclusive-share setting or /mnt/user is not mounted.
+	// release has no exclusive-share setting or user shares are not mounted.
 
 	// Exclusive is true when /mnt/user/<name> is a symlink to the pool, so
-	// share I/O bypasses the FUSE user share layer (shfs).
+	// share I/O bypasses the FUSE user share layer (shfs). Taken from the
+	// exclusive flag emhttp records in shares.ini.
 	Exclusive *bool `json:"exclusive,omitempty" example:"true"`
 	// ExclusiveEligible is true when exclusive shares are enabled globally and
 	// the share lives on a single pool (primary pool only, no secondary storage;
 	// before Unraid 7.2 also not exported over NFS).
 	ExclusiveEligible *bool `json:"exclusive_eligible,omitempty" example:"true"`
-	// ExclusivePool is the pool /mnt/user/<name> points at when exclusive.
+	// ExclusivePool is the pool the share's symlink points at when exclusive.
 	ExclusivePool string `json:"exclusive_pool,omitempty" example:"cache"`
 	// Locations lists the pools and array disks holding a top-level folder for
 	// the share. Reported only when the share is eligible but not exclusive:

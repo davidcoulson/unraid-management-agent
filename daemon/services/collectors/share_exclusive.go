@@ -1,8 +1,6 @@
 package collectors
 
 import (
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,80 +14,82 @@ import (
 	"github.com/tinkerologie/unraid-management-agent/daemon/logger"
 )
 
-// defaultMntRoot is where Unraid mounts array disks, pools and the user share
-// file system (/mnt/user).
+// defaultMntRoot is where Unraid mounts array disks and pools.
 const defaultMntRoot = "/mnt"
 
-// exclusivePaths holds the file system locations the exclusive-share check
-// reads. Empty fields fall back to the production defaults so a zero-value
-// ShareCollector keeps working; tests point them at fixture directories.
-type exclusivePaths struct {
-	mntRoot  string
-	varIni   string
-	disksIni string
+// sharePaths holds the file locations the share collector reads. Empty
+// fields fall back to the production defaults so a zero-value ShareCollector
+// keeps working; tests point them at fixture files.
+type sharePaths struct {
+	mntRoot   string
+	sharesIni string
+	varIni    string
+	disksIni  string
 }
 
-func (p exclusivePaths) mnt() string {
+func (p sharePaths) mnt() string {
 	if p.mntRoot == "" {
 		return defaultMntRoot
 	}
 	return p.mntRoot
 }
 
-func (p exclusivePaths) vars() string {
+func (p sharePaths) shares() string {
+	if p.sharesIni == "" {
+		return constants.SharesIni
+	}
+	return p.sharesIni
+}
+
+func (p sharePaths) vars() string {
 	if p.varIni == "" {
 		return constants.VarIni
 	}
 	return p.varIni
 }
 
-func (p exclusivePaths) disks() string {
+func (p sharePaths) disks() string {
 	if p.disksIni == "" {
 		return constants.DisksIni
 	}
 	return p.disksIni
 }
 
-// applyExclusiveState fills in the exclusive-share fields (Unraid 6.12+).
+// applyExclusiveState completes the exclusive-share fields (Unraid 6.12+).
 //
 // With exclusive shares enabled globally, Unraid replaces /mnt/user/<share>
 // with a symlink to /mnt/<pool>/<share> for every share that lives on a single
 // pool, so I/O bypasses the FUSE user share layer (shfs). If a top-level folder
 // for the share also exists on another pool or array disk, Unraid silently
-// keeps the share on FUSE instead. This reports which of the two happened.
+// keeps the share on FUSE instead.
 //
-// Only lstat/readlink are used on /mnt/user, so nothing is read through FUSE.
-// The fields stay unset when the release has no exclusive-share setting or the
+// Exclusive comes from the "exclusive" flag emhttp writes to shares.ini when
+// it sets up the symlink, so nothing under /mnt/user (FUSE) is touched. The
+// fields are cleared when the release has no exclusive-share setting or the
 // user share file system is not mounted (array stopped, user shares disabled).
-func (p exclusivePaths) applyExclusiveState(shares []dto.ShareInfo) {
+func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo) {
 	settings, supported := p.exclusiveSettings()
-	if !supported {
-		return
-	}
-
-	userRoot := filepath.Join(p.mnt(), "user")
-	if info, err := os.Stat(userRoot); err != nil || !info.IsDir() {
-		logger.Debug("Share: %s not available, skipping exclusive share check", userRoot)
+	if !supported || !settings.userSharesMounted {
+		for i := range shares {
+			shares[i].Exclusive = nil
+		}
 		return
 	}
 
 	var branches []storageBranch // loaded lazily: only needed for shares on FUSE
 	for i := range shares {
 		share := &shares[i]
-		if validateShareName(share.Name) != nil {
+		if share.Exclusive == nil || validateShareName(share.Name) != nil {
+			share.Exclusive = nil
 			continue
 		}
-
-		exclusive, pool, ok := p.shareLink(userRoot, share.Name)
-		if !ok {
-			continue
-		}
+		exclusive := *share.Exclusive
 		eligible := settings.enabled && share.UseCache == "only" && share.CachePool != "" &&
 			share.CachePool2 == "" && (!settings.nfsBlocks || !share.NFSExport)
-
-		share.Exclusive = &exclusive
 		share.ExclusiveEligible = &eligible
-		share.ExclusivePool = pool
+		if exclusive {
+			share.ExclusivePool = share.CachePool
+		}
 
 		if eligible && !exclusive {
 			if branches == nil {
@@ -102,16 +102,17 @@ func (p exclusivePaths) applyExclusiveState(shares []dto.ShareInfo) {
 
 // exclusiveSettings holds the var.ini settings the exclusive share check uses.
 type exclusiveSettings struct {
-	enabled   bool // "Permit exclusive shares"
-	nfsBlocks bool // release refuses exclusive access for NFS exported shares
-	include   map[string]bool
-	exclude   map[string]bool
+	enabled           bool // "Permit exclusive shares"
+	nfsBlocks         bool // release refuses exclusive access for NFS exported shares
+	userSharesMounted bool // user shares enabled and the array started
+	include           map[string]bool
+	exclude           map[string]bool
 }
 
 // exclusiveSettings reads the global share settings from var.ini. supported
 // is false when the exclusive share key is absent (Unraid before 6.12).
 // Unraid lifted the NFS export restriction in 7.2.0.
-func (p exclusivePaths) exclusiveSettings() (exclusiveSettings, bool) {
+func (p sharePaths) exclusiveSettings() (exclusiveSettings, bool) {
 	cfg, err := ini.Load(p.vars())
 	if err != nil {
 		logger.Debug("Share: cannot read %s for exclusive share setting: %v", p.vars(), err)
@@ -124,8 +125,10 @@ func (p exclusivePaths) exclusiveSettings() (exclusiveSettings, bool) {
 	return exclusiveSettings{
 		enabled:   section.Key("shareUserExclusive").String() == "yes",
 		nfsBlocks: releaseBefore(section.Key("version").String(), 7, 2),
-		include:   diskSet(section.Key("shareUserInclude").String()),
-		exclude:   diskSet(section.Key("shareUserExclude").String()),
+		userSharesMounted: section.Key("shareUser").String() == "e" &&
+			section.Key("fsState").String() == "Started",
+		include: diskSet(section.Key("shareUserInclude").String()),
+		exclude: diskSet(section.Key("shareUserExclude").String()),
 	}, true
 }
 
@@ -156,39 +159,6 @@ func releaseBefore(version string, major, minor int) bool {
 	return gotMajor < major || (gotMajor == major && gotMinor < minor)
 }
 
-// shareLink inspects /mnt/user/<name> without following it. A symlink means
-// the share is exclusive; pool is the pool it points at. ok is false when the
-// entry cannot be inspected for a reason other than not existing.
-func (p exclusivePaths) shareLink(userRoot, name string) (exclusive bool, pool string, ok bool) {
-	path := filepath.Join(userRoot, name)
-	info, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, "", true
-		}
-		logger.Debug("Share: cannot lstat %s: %v", path, err)
-		return false, "", false
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return false, "", true
-	}
-
-	target, err := os.Readlink(path)
-	if err != nil {
-		logger.Debug("Share: cannot read link %s: %v", path, err)
-		return true, "", true
-	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(userRoot, target)
-	}
-	// Expect /mnt/<pool>/<name>; anything else leaves the pool unknown.
-	target = filepath.Clean(target)
-	if filepath.Dir(filepath.Dir(target)) == filepath.Clean(p.mnt()) {
-		pool = filepath.Base(filepath.Dir(target))
-	}
-	return true, pool, true
-}
-
 // storageBranch is an array disk or pool that is part of the user share
 // file system.
 type storageBranch struct {
@@ -203,7 +173,7 @@ type storageBranch struct {
 // global included/excluded disk settings and mounted pools that are not
 // excluded from user shares. Pool member devices (cache2, ...) carry no
 // fsStatus and flash/parity entries have other types, so they never match.
-func (p exclusivePaths) storageBranches(settings exclusiveSettings) []storageBranch {
+func (p sharePaths) storageBranches(settings exclusiveSettings) []storageBranch {
 	// #nosec G304 -- path is the fixed emhttp disks.ini (overridable only in tests)
 	data, err := os.ReadFile(p.disks())
 	if err != nil {
@@ -269,7 +239,7 @@ func branchAsleep(kv map[string]string, spunDown map[int]bool) bool {
 // shareLocations lists the awake disks and pools holding a top-level folder
 // for the share (one lstat of /mnt/<branch>/<name> each) and the sleeping
 // ones that were left unchecked.
-func (p exclusivePaths) shareLocations(branches []storageBranch, name string) (found, unchecked []string) {
+func (p sharePaths) shareLocations(branches []storageBranch, name string) (found, unchecked []string) {
 	found = []string{}
 	for _, branch := range branches {
 		if branch.asleep {
