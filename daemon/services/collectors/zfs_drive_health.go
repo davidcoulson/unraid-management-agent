@@ -26,29 +26,71 @@ const (
 	driveHealthTTL = 5 * time.Minute
 	// driveHealthTimeout bounds one smartctl run.
 	driveHealthTimeout = 15 * time.Second
-	// driveHealthWorkers bounds how many smartctl runs happen at once.
+	// driveHealthWorkers bounds how many smartctl processes exist at once,
+	// including ones that timed out but have not exited yet.
 	driveHealthWorkers = 4
 )
 
 // blockDeviceName matches a kernel block device name such as sda or nvme0n1.
 var blockDeviceName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// diskRef is a disk to read SMART data from.
+type diskRef struct {
+	name string // kernel name, e.g. sdb or nvme0n1
+	// generation is the kernel's diskseq for the disk. It changes when the
+	// disk is replaced or re-probed, even under the same name, so a cached
+	// reading is never attributed to a different drive. Empty when unknown.
+	generation string
+	// smartType is the smartctl -d type (nvme, sat or scsi), chosen from
+	// sysfs so smartctl does not probe the drive to detect it. Empty means
+	// the disk is not read (USB bridges and other transports may ignore the
+	// standby check and wake the drive).
+	smartType string
+}
+
+// describeDisk works out how to read a disk's SMART data from sysfs alone.
+func describeDisk(sysRoot, disk string) diskRef {
+	ref := diskRef{name: disk}
+	block := filepath.Join(sysRoot, "class", "block", disk)
+	if seq, err := os.ReadFile(filepath.Join(block, "diskseq")); err == nil { // #nosec G304 -- sysfs path built from a validated kernel device name
+		ref.generation = strings.TrimSpace(string(seq))
+	}
+	real, err := filepath.EvalSymlinks(block)
+	switch {
+	case err != nil || strings.Contains(real, "/usb"):
+	case strings.HasPrefix(disk, "nvme"):
+		ref.smartType = "nvme"
+	case strings.HasPrefix(disk, "sd"):
+		// libata disks (also SATA disks behind a SAS HBA's SATL) report "ATA".
+		vendor, _ := os.ReadFile(filepath.Join(block, "device", "vendor")) // #nosec G304 -- sysfs path built from a validated kernel device name
+		if strings.TrimSpace(string(vendor)) == "ATA" {
+			ref.smartType = "sat"
+		} else {
+			ref.smartType = "scsi"
+		}
+	}
+	return ref
+}
+
 // smartctlRunner runs smartctl for one disk and returns its stdout. The
 // channel is closed once the process has been reaped.
-type smartctlRunner func(timeout time.Duration, disk string) (string, <-chan struct{}, error)
+type smartctlRunner func(timeout time.Duration, disk, smartType string) (string, <-chan struct{}, error)
 
-// runSmartctl reads a disk's SMART data as JSON without waking it from standby.
-func runSmartctl(timeout time.Duration, disk string) (string, <-chan struct{}, error) {
+// runSmartctl reads a disk's SMART data as JSON without waking it from
+// standby. The device type is given explicitly so smartctl does not send
+// detection commands before its power-mode check.
+func runSmartctl(timeout time.Duration, disk, smartType string) (string, <-chan struct{}, error) {
 	return lib.ExecCommandStdoutGuarded(context.Background(), timeout,
-		constants.SmartctlBin, "-j", "-a", "-n", "standby", "/dev/"+disk)
+		constants.SmartctlBin, "-j", "-a", "-n", "standby", "-d", smartType, "/dev/"+disk)
 }
 
 // driveHealthEntry is the cached state of one disk.
 type driveHealthEntry struct {
-	health    *dto.DriveHealth // last successful read, nil if none
-	standby   bool             // asleep at the last attempt
-	attempted time.Time        // last time smartctl was run
-	inflight  <-chan struct{}  // closed once the last smartctl process exited
+	generation string           // diskseq the entry belongs to
+	health     *dto.DriveHealth // last successful read, nil if none
+	standby    bool             // asleep at the last attempt
+	attempted  time.Time        // last time smartctl was run
+	inflight   <-chan struct{}  // closed once the last smartctl process exited
 }
 
 // driveHealthCache reads SMART data for ZFS pool members and caches it per disk.
@@ -57,7 +99,9 @@ type driveHealthCache struct {
 	binary  string
 	ttl     time.Duration
 	timeout time.Duration
-	workers int
+	// slots bounds the smartctl processes alive at once. A slot is held until
+	// the process has been reaped, not just until it timed out.
+	slots   chan struct{}
 	now     func() time.Time
 	run     smartctlRunner
 	entries map[string]*driveHealthEntry
@@ -68,7 +112,7 @@ func newDriveHealthCache() *driveHealthCache {
 		binary:  constants.SmartctlBin,
 		ttl:     driveHealthTTL,
 		timeout: driveHealthTimeout,
-		workers: driveHealthWorkers,
+		slots:   make(chan struct{}, driveHealthWorkers),
 		now:     time.Now,
 		run:     runSmartctl,
 		entries: make(map[string]*driveHealthEntry),
@@ -78,7 +122,7 @@ func newDriveHealthCache() *driveHealthCache {
 // lookup returns the health of each disk, refreshing entries older than the
 // TTL. Disks that have never been read successfully and are not asleep are
 // left out. Entries for disks no longer asked for are dropped.
-func (c *driveHealthCache) lookup(disks []string) map[string]*dto.DriveHealth {
+func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 	if _, err := os.Stat(c.binary); err != nil {
 		return nil
 	}
@@ -88,16 +132,17 @@ func (c *driveHealthCache) lookup(disks []string) map[string]*dto.DriveHealth {
 
 	now := c.now()
 	wanted := make(map[string]bool, len(disks))
-	var stale []string
-	for _, disk := range disks {
-		if wanted[disk] || !blockDeviceName.MatchString(disk) {
+	var stale []diskRef
+	for _, ref := range disks {
+		if wanted[ref.name] || ref.smartType == "" || !blockDeviceName.MatchString(ref.name) {
 			continue
 		}
-		wanted[disk] = true
-		entry := c.entries[disk]
-		if entry == nil {
-			entry = &driveHealthEntry{}
-			c.entries[disk] = entry
+		wanted[ref.name] = true
+		entry := c.entries[ref.name]
+		if entry == nil || entry.generation != ref.generation {
+			// New disk, or a different disk now has this name.
+			entry = &driveHealthEntry{generation: ref.generation}
+			c.entries[ref.name] = entry
 		}
 		if !entry.attempted.IsZero() && now.Sub(entry.attempted) < c.ttl {
 			continue
@@ -106,7 +151,7 @@ func (c *driveHealthCache) lookup(disks []string) map[string]*dto.DriveHealth {
 			// A previous smartctl for this disk is still stuck; don't pile up.
 			continue
 		}
-		stale = append(stale, disk)
+		stale = append(stale, ref)
 	}
 	for disk := range c.entries {
 		if !wanted[disk] {
@@ -131,8 +176,10 @@ func (c *driveHealthCache) lookup(disks []string) map[string]*dto.DriveHealth {
 	return result
 }
 
-// refresh runs smartctl for the given disks, at most c.workers at a time.
-func (c *driveHealthCache) refresh(disks []string, now time.Time) {
+// refresh runs smartctl for the given disks while process slots are free.
+// Disks still waiting for a slot after c.timeout are left for the next
+// cycle, so stuck processes cannot hold up the ZFS collection for long.
+func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 	type outcome struct {
 		disk     string
 		health   *dto.DriveHealth
@@ -140,20 +187,30 @@ func (c *driveHealthCache) refresh(disks []string, now time.Time) {
 		inflight <-chan struct{}
 	}
 	results := make(chan outcome, len(disks))
-	sem := make(chan struct{}, max(c.workers, 1))
+	queue, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
 	var wg sync.WaitGroup
-	for _, disk := range disks {
+	for _, ref := range disks {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			out, done, runErr := c.run(c.timeout, disk)
+			select {
+			case c.slots <- struct{}{}:
+			case <-queue.Done():
+				return
+			}
+			out, done, runErr := c.run(c.timeout, ref.name, ref.smartType)
+			go func() {
+				if done != nil {
+					<-done
+				}
+				<-c.slots
+			}()
 			health, standby, err := parseSmartctlJSON(out, now)
 			if err != nil {
-				logger.Debug("ZFS: SMART read of %s failed: %v (smartctl: %v)", disk, err, runErr)
+				logger.Debug("ZFS: SMART read of %s failed: %v (smartctl: %v)", ref.name, err, runErr)
 			}
-			results <- outcome{disk: disk, health: health, standby: standby, inflight: done}
+			results <- outcome{disk: ref.name, health: health, standby: standby, inflight: done}
 		}()
 	}
 	wg.Wait()
@@ -344,14 +401,17 @@ func poolDrives(pool *dto.ZFSPool) []dto.ZFSDrive {
 // It returns "" when the member cannot be found (e.g. a missing device that
 // zpool shows by GUID).
 func resolveWholeDisk(sysRoot, devRoot, member string) string {
-	node := filepath.Base(member)
-	if !blockDeviceName.MatchString(node) {
+	alias := filepath.Base(member)
+	if alias == "." || alias == ".." || alias == string(filepath.Separator) {
 		return ""
 	}
+	node := alias
 	if _, err := os.Stat(filepath.Join(sysRoot, "class", "block", node)); err != nil {
+		// Alias names (by-id links such as nvme-eui.0025...) may contain
+		// characters kernel names don't; the resolved name is checked below.
 		node = ""
 		for _, dir := range []string{"mapper", filepath.Join("disk", "by-id"), filepath.Join("disk", "by-partuuid")} {
-			target, err := filepath.EvalSymlinks(filepath.Join(devRoot, dir, filepath.Base(member)))
+			target, err := filepath.EvalSymlinks(filepath.Join(devRoot, dir, alias))
 			if err == nil {
 				node = filepath.Base(target)
 				break
@@ -365,6 +425,9 @@ func resolveWholeDisk(sysRoot, devRoot, member string) string {
 	// Follow device-mapper layers (LUKS) down to the partition, then the
 	// partition up to its disk. Three hops cover dm -> partition -> disk.
 	for range 3 {
+		if !blockDeviceName.MatchString(node) {
+			return ""
+		}
 		block := filepath.Join(sysRoot, "class", "block", node)
 		if slaves, err := os.ReadDir(filepath.Join(block, "slaves")); err == nil && len(slaves) > 0 {
 			node = slaves[0].Name()
@@ -385,14 +448,14 @@ func resolveWholeDisk(sysRoot, devRoot, member string) string {
 // attachDrives fills each pool's Drives with its members, the disk each one
 // is on, and that disk's cached SMART health.
 func (c *ZFSCollector) attachDrives(pools []dto.ZFSPool) {
-	var disks []string
+	var disks []diskRef
 	for i := range pools {
 		pools[i].Drives = poolDrives(&pools[i])
 		for j := range pools[i].Drives {
 			drive := &pools[i].Drives[j]
 			drive.Disk = resolveWholeDisk(c.sysRoot, c.devRoot, drive.Name)
 			if drive.Disk != "" {
-				disks = append(disks, drive.Disk)
+				disks = append(disks, describeDisk(c.sysRoot, drive.Disk))
 			}
 		}
 	}

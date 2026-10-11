@@ -174,6 +174,9 @@ func fakeSysfs(t *testing.T) (sysRoot, devRoot string) {
 		dir := filepath.Join(sysRoot, "devices", "pci", disk)
 		mkdir(dir)
 		link(dir, filepath.Join(block, disk))
+		if err := os.WriteFile(filepath.Join(dir, "diskseq"), []byte("7\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		for _, part := range parts {
 			touch(filepath.Join(dir, part, "partition"))
 			link(filepath.Join(dir, part), filepath.Join(block, part))
@@ -183,15 +186,31 @@ func fakeSysfs(t *testing.T) (sysRoot, devRoot string) {
 	addDisk("nvme0n1", "nvme0n1p1")
 	addDisk("sdb", "sdb1")
 	addDisk("sdc", "sdc1")
+	touch(filepath.Join(sysRoot, "devices", "pci", "sdc", "device", "vendor"))
+	if err := os.WriteFile(filepath.Join(sysRoot, "devices", "pci", "sdc", "device", "vendor"), []byte("ATA     \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A USB-attached disk.
+	usb := filepath.Join(sysRoot, "devices", "pci", "usb2", "2-1", "sdu")
+	mkdir(usb)
+	link(usb, filepath.Join(block, "sdu"))
+	// A virtio disk smartctl can't read.
+	addDisk("vda")
 
 	// dm-0 is a LUKS mapping on sdc1, reachable as /dev/mapper/crypt1.
 	touch(filepath.Join(block, "dm-0", "slaves", "sdc1"))
 	touch(filepath.Join(devRoot, "dm-0"))
 	link(filepath.Join(devRoot, "dm-0"), filepath.Join(devRoot, "mapper", "crypt1"))
 
-	// A by-id link to sdb1.
+	// By-id links to sdb1 and nvme0n1p1 (EUI aliases contain a dot).
 	touch(filepath.Join(devRoot, "sdb1"))
 	link(filepath.Join(devRoot, "sdb1"), filepath.Join(devRoot, "disk", "by-id", "ata-MODEL-part1"))
+	touch(filepath.Join(devRoot, "nvme0n1p1"))
+	link(filepath.Join(devRoot, "nvme0n1p1"), filepath.Join(devRoot, "disk", "by-id", "nvme-eui.0025385a01234567-part1"))
+	// A by-id link pointing at something that is not a block device name.
+	touch(filepath.Join(devRoot, "odd name"))
+	link(filepath.Join(devRoot, "odd name"), filepath.Join(devRoot, "disk", "by-id", "odd-alias"))
 
 	// dm-1 -> dm-2 -> dm-3 -> dm-4: deeper than the resolver follows.
 	for i, next := range []string{"dm-2", "dm-3", "dm-4", "dm-5"} {
@@ -217,6 +236,10 @@ func TestResolveWholeDisk(t *testing.T) {
 		{"crypt1", "sdc"},
 		{"dm-0", "sdc"},
 		{"ata-MODEL-part1", "sdb"},
+		{"nvme-eui.0025385a01234567-part1", "nvme0n1"},
+		{"odd-alias", ""},
+		{"..", ""},
+		{"/", ""},
 		{"12345678901234567890", ""}, // missing device shown by GUID
 		{"bad name!", ""},
 		{"dm-1", ""}, // too many layers
@@ -256,13 +279,17 @@ type fakeSmartctl struct {
 	mu       sync.Mutex
 	outputs  map[string]string
 	calls    []string
+	types    map[string]string
 	inflight map[string]chan struct{}
 }
 
-func (f *fakeSmartctl) run(_ time.Duration, disk string) (string, <-chan struct{}, error) {
+func (f *fakeSmartctl) run(_ time.Duration, disk, smartType string) (string, <-chan struct{}, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, disk)
+	if f.types != nil {
+		f.types[disk] = smartType
+	}
 	done := f.inflight[disk]
 	if done == nil {
 		done = make(chan struct{})
@@ -291,10 +318,19 @@ func newTestCache(t *testing.T, runner *fakeSmartctl, clock *time.Time) *driveHe
 	}
 	cache := newDriveHealthCache()
 	cache.binary = binary
-	cache.workers = 2
+	cache.slots = make(chan struct{}, 2)
 	cache.now = func() time.Time { return *clock }
 	cache.run = runner.run
 	return cache
+}
+
+// refs turns disk names into diskRefs read as SCSI with no known generation.
+func refs(names ...string) []diskRef {
+	out := make([]diskRef, len(names))
+	for i, name := range names {
+		out[i] = diskRef{name: name, smartType: "scsi"}
+	}
+	return out
 }
 
 func sameSet(a, b []string) bool {
@@ -324,7 +360,7 @@ func TestDriveHealthCacheLookup(t *testing.T) {
 	cache := newTestCache(t, runner, &clock)
 
 	// First lookup reads every distinct, valid disk once.
-	got := cache.lookup([]string{"nvme0n1", "sdb", "nvme0n1", "sdx", "sdfail", "bad/name"})
+	got := cache.lookup(refs("nvme0n1", "sdb", "nvme0n1", "sdx", "sdfail", "bad/name"))
 	if calls := runner.takeCalls(); !sameSet(calls, []string{"nvme0n1", "sdb", "sdx", "sdfail"}) {
 		t.Fatalf("calls = %v", calls)
 	}
@@ -343,7 +379,7 @@ func TestDriveHealthCacheLookup(t *testing.T) {
 
 	// Within the TTL nothing is re-read.
 	clock = clock.Add(time.Minute)
-	cache.lookup([]string{"nvme0n1", "sdb", "sdx", "sdfail"})
+	cache.lookup(refs("nvme0n1", "sdb", "sdx", "sdfail"))
 	if calls := runner.takeCalls(); len(calls) != 0 {
 		t.Fatalf("calls within TTL = %v", calls)
 	}
@@ -356,7 +392,7 @@ func TestDriveHealthCacheLookup(t *testing.T) {
 	runner.outputs["sdfail"] = readSmartctlFixture(t, "ata.json")
 	runner.mu.Unlock()
 	clock = clock.Add(driveHealthTTL)
-	got = cache.lookup([]string{"nvme0n1", "sdb", "sdfail"})
+	got = cache.lookup(refs("nvme0n1", "sdb", "sdfail"))
 	if calls := runner.takeCalls(); !sameSet(calls, []string{"nvme0n1", "sdb", "sdfail"}) {
 		t.Fatalf("calls after TTL = %v", calls)
 	}
@@ -378,7 +414,7 @@ func TestDriveHealthCacheLookup(t *testing.T) {
 	runner.outputs["sdb"] = readSmartctlFixture(t, "scsi.json")
 	runner.mu.Unlock()
 	clock = clock.Add(driveHealthTTL)
-	got = cache.lookup([]string{"sdb"})
+	got = cache.lookup(refs("sdb"))
 	if h := got["sdb"]; h == nil || h.Standby || !h.CollectedAt.Equal(clock) {
 		t.Errorf("sdb (awake again) = %+v", h)
 	}
@@ -394,11 +430,11 @@ func TestDriveHealthCacheSkipsStuckSmartctl(t *testing.T) {
 	}
 	cache := newTestCache(t, runner, &clock)
 
-	cache.lookup([]string{"sdb"})
+	cache.lookup(refs("sdb"))
 	runner.takeCalls()
 
 	clock = clock.Add(driveHealthTTL)
-	got := cache.lookup([]string{"sdb"})
+	got := cache.lookup(refs("sdb"))
 	if calls := runner.takeCalls(); len(calls) != 0 {
 		t.Fatalf("smartctl re-run while the previous one is stuck: %v", calls)
 	}
@@ -407,7 +443,7 @@ func TestDriveHealthCacheSkipsStuckSmartctl(t *testing.T) {
 	}
 
 	close(stuck)
-	cache.lookup([]string{"sdb"})
+	cache.lookup(refs("sdb"))
 	if calls := runner.takeCalls(); len(calls) != 1 {
 		t.Fatalf("calls after the stuck run exited = %v", calls)
 	}
@@ -416,11 +452,11 @@ func TestDriveHealthCacheSkipsStuckSmartctl(t *testing.T) {
 func TestDriveHealthCacheWithoutSmartctl(t *testing.T) {
 	cache := newDriveHealthCache()
 	cache.binary = filepath.Join(t.TempDir(), "missing")
-	cache.run = func(time.Duration, string) (string, <-chan struct{}, error) {
+	cache.run = func(time.Duration, string, string) (string, <-chan struct{}, error) {
 		t.Fatal("smartctl must not run when the binary is missing")
 		return "", nil, nil
 	}
-	if got := cache.lookup([]string{"sdb"}); got != nil {
+	if got := cache.lookup(refs("sdb")); got != nil {
 		t.Errorf("lookup() = %v, want nil", got)
 	}
 }
@@ -428,7 +464,7 @@ func TestDriveHealthCacheWithoutSmartctl(t *testing.T) {
 func TestRunSmartctlReportsStartFailure(t *testing.T) {
 	// smartctl is not installed on the test host (or /dev/zz-none does not
 	// exist), so either the start or the run fails.
-	if _, _, err := runSmartctl(time.Second, "zz-none"); err == nil {
+	if _, _, err := runSmartctl(time.Second, "zz-none", "scsi"); err == nil {
 		t.Error("runSmartctl() on a missing device returned no error")
 	}
 }
@@ -439,7 +475,7 @@ func TestAttachDrives(t *testing.T) {
 	runner := &fakeSmartctl{outputs: map[string]string{
 		"nvme0n1": readSmartctlFixture(t, "nvme.json"),
 		"sdb":     readSmartctlFixture(t, "scsi.json"),
-	}}
+	}, types: map[string]string{}}
 	collector := &ZFSCollector{sysRoot: sysRoot, devRoot: devRoot, driveHealth: newTestCache(t, runner, &clock)}
 
 	pools := []dto.ZFSPool{
@@ -462,6 +498,9 @@ func TestAttachDrives(t *testing.T) {
 	slow := pools[1].Drives
 	if len(slow) != 1 || slow[0].Disk != "sdb" || slow[0].Vdev != "" || slow[0].Health == nil || slow[0].Health.Protocol != "SCSI" {
 		t.Errorf("slow drives = %+v", slow)
+	}
+	if want := map[string]string{"nvme0n1": "nvme", "sdb": "scsi"}; !reflect.DeepEqual(runner.types, want) {
+		t.Errorf("smartctl device types = %v, want %v", runner.types, want)
 	}
 	if pools[2].Drives != nil {
 		t.Errorf("pool without status should have no drives, got %+v", pools[2].Drives)
@@ -515,5 +554,107 @@ func TestCollectPoolsAttachesDrives(t *testing.T) {
 	if len(drives) != 2 || drives[0].Disk != "nvme0n1" || drives[0].Vdev != "mirror-0" ||
 		drives[0].Health == nil || drives[1].Disk != "sdb" || drives[1].Health != nil {
 		t.Errorf("drives = %+v", drives)
+	}
+}
+
+func TestDescribeDisk(t *testing.T) {
+	sysRoot, _ := fakeSysfs(t)
+	tests := []struct {
+		disk string
+		want diskRef
+	}{
+		{"nvme0n1", diskRef{name: "nvme0n1", generation: "7", smartType: "nvme"}},
+		{"sdb", diskRef{name: "sdb", generation: "7", smartType: "scsi"}},
+		{"sdc", diskRef{name: "sdc", generation: "7", smartType: "sat"}},
+		{"sdu", diskRef{name: "sdu"}},                  // USB bridge: not read
+		{"vda", diskRef{name: "vda", generation: "7"}}, // no SMART transport
+		{"sdz", diskRef{name: "sdz"}},                  // gone
+	}
+	for _, tt := range tests {
+		if got := describeDisk(sysRoot, tt.disk); got != tt.want {
+			t.Errorf("describeDisk(%q) = %+v, want %+v", tt.disk, got, tt.want)
+		}
+	}
+}
+
+// TestDriveHealthCacheDiskReplaced checks that a reading is dropped when a
+// different disk (new diskseq) appears under the same name.
+func TestDriveHealthCacheDiskReplaced(t *testing.T) {
+	clock := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	runner := &fakeSmartctl{outputs: map[string]string{"sdb": readSmartctlFixture(t, "scsi.json")}}
+	cache := newTestCache(t, runner, &clock)
+
+	if got := cache.lookup([]diskRef{{name: "sdb", generation: "1", smartType: "scsi"}}); got["sdb"] == nil {
+		t.Fatal("first disk not read")
+	}
+	runner.takeCalls()
+
+	// Replacement disk under the same name, asleep: re-read at once, and the
+	// old disk's reading must not be reported for it.
+	runner.mu.Lock()
+	runner.outputs["sdb"] = readSmartctlFixture(t, "standby.json")
+	runner.mu.Unlock()
+	got := cache.lookup([]diskRef{{name: "sdb", generation: "2", smartType: "scsi"}})
+	if calls := runner.takeCalls(); len(calls) != 1 {
+		t.Fatalf("replacement disk not re-read within the TTL: %v", calls)
+	}
+	if want := (&dto.DriveHealth{Standby: true}); !reflect.DeepEqual(got["sdb"], want) {
+		t.Errorf("replacement disk = %+v, want %+v", got["sdb"], want)
+	}
+}
+
+func TestDriveHealthCacheSkipsUnreadableDisks(t *testing.T) {
+	clock := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	runner := &fakeSmartctl{outputs: map[string]string{}}
+	cache := newTestCache(t, runner, &clock)
+	got := cache.lookup([]diskRef{{name: "sdu"}})
+	if calls := runner.takeCalls(); len(calls) != 0 || len(got) != 0 {
+		t.Errorf("calls = %v, result = %v; a disk without a SMART type must not be read", calls, got)
+	}
+}
+
+// TestDriveHealthCacheHoldsSlotsForStuckProcesses checks that a smartctl
+// that timed out but has not exited keeps its process slot, and that disks
+// waiting for a slot give up instead of blocking the collection.
+func TestDriveHealthCacheHoldsSlotsForStuckProcesses(t *testing.T) {
+	clock := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	stuck := make(chan struct{})
+	runner := &fakeSmartctl{
+		outputs:  map[string]string{"sdb": readSmartctlFixture(t, "scsi.json")},
+		inflight: map[string]chan struct{}{"sda": stuck},
+	}
+	cache := newTestCache(t, runner, &clock)
+	cache.slots = make(chan struct{}, 1)
+	cache.timeout = 20 * time.Millisecond
+
+	cache.lookup(refs("sda"))
+	if calls := runner.takeCalls(); len(calls) != 1 {
+		t.Fatalf("calls = %v", calls)
+	}
+
+	start := time.Now()
+	got := cache.lookup(refs("sda", "sdb"))
+	if calls := runner.takeCalls(); len(calls) != 0 {
+		t.Fatalf("smartctl started while the only slot is held by a stuck process: %v", calls)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("lookup waited far longer than the queue timeout")
+	}
+	if _, ok := got["sdb"]; ok {
+		t.Error("sdb should not have been read")
+	}
+
+	// Once the stuck process exits, its slot frees and sdb is read.
+	close(stuck)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(cache.slots) > 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	got = cache.lookup(refs("sda", "sdb"))
+	if calls := runner.takeCalls(); !sameSet(calls, []string{"sdb"}) {
+		t.Fatalf("calls after the stuck process exited = %v", calls)
+	}
+	if got["sdb"] == nil {
+		t.Error("sdb not read after the slot freed")
 	}
 }

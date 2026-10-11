@@ -18,9 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `smartctl -j -a -n standby`: model, protocol, media type, SMART status,
   temperature, power-on hours, NVMe percentage used / available spare / critical
   warning, and media errors (NVMe media errors, SCSI uncorrected errors or ATA
-  attribute 187). Readings are cached per disk for 5 minutes, at most 4 smartctl
-  runs happen at once (15 s timeout each), and drives in standby are not woken.
-  Serial numbers are never reported.
+  attribute 187). smartctl gets an explicit device type from sysfs (`nvme`,
+  `sat` or `scsi`) so it does not probe the drive, USB-attached disks are not
+  read, and drives in standby are not woken. Readings are cached per disk for
+  5 minutes and dropped when the kernel's `diskseq` shows a different disk
+  under the same name. At most 4 smartctl processes exist at once (a timed-out
+  one keeps its slot until it exits; 15 s timeout). Serial numbers are never
+  reported.
   ([#227](https://github.com/tinkerologie/unraid-management-agent/issues/227))
 
 ### Changed
