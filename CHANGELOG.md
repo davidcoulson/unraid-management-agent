@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fan channel labels** — each fan in `/api/v1/system` (`fans[]`) now has an
+  optional `label`: the channel's lm-sensors label (the driver's `fanN_label`
+  or a `sensors.conf` `label` override, e.g. `"Coolant Flow (rpm)"`), so
+  consumers can show the user's names and tell a flow meter on a fan header
+  from a fan. Omitted for unlabelled channels and the sysfs fallback.
+  ([#228](https://github.com/tinkerologie/unraid-management-agent/issues/228))
+
 - **ZFS pool member drives with SMART health** — each pool in
   `/api/v1/zfs/pools` (and the `zfs_pools_update` event) now has a `drives`
   list: every leaf member with the whole disk it lives on (resolved through
