@@ -34,7 +34,7 @@ type ZFSCollector struct {
 
 // NewZFSCollector creates a new ZFS collector
 func NewZFSCollector(ctx *domain.Context) *ZFSCollector {
-	return &ZFSCollector{
+	c := &ZFSCollector{
 		ctx:         ctx,
 		execOutput:  lib.ExecCommandOutput,
 		sysRoot:     "/sys",
@@ -42,6 +42,8 @@ func NewZFSCollector(ctx *domain.Context) *ZFSCollector {
 		disksIni:    constants.DisksIni,
 		driveHealth: newDriveHealthCache(),
 	}
+	c.driveHealth.spinStates = func() map[string]bool { return unraidSpinStates(c.disksIni) }
+	return c
 }
 
 // Start begins the ZFS collection loop

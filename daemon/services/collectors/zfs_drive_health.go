@@ -51,6 +51,9 @@ type diskRef struct {
 	smartType string
 	// asleep is true when Unraid reports the disk spun down. It is not read.
 	asleep bool
+	// unraidOnly is true for a rotational SCSI disk: it may only be read
+	// while Unraid manages it and reports it spinning.
+	unraidOnly bool
 }
 
 // unraidSpinStates returns which disks Unraid reports as spun down, keyed
@@ -95,8 +98,13 @@ func describeDisk(sysRoot, disk string, spinStates map[string]bool) diskRef {
 		switch {
 		case strings.TrimSpace(string(vendor)) == "ATA":
 			ref.smartType = "sat"
-		case strings.TrimSpace(string(rotational)) != "1" || managed:
+		case strings.TrimSpace(string(rotational)) != "1":
 			ref.smartType = "scsi"
+		default:
+			ref.unraidOnly = true
+			if managed {
+				ref.smartType = "scsi"
+			}
 		}
 	}
 	return ref
@@ -133,10 +141,14 @@ type driveHealthCache struct {
 	timeout time.Duration
 	// slots bounds the smartctl processes alive at once. A slot is held until
 	// the process has been reaped, not just until it timed out.
-	slots   chan struct{}
-	now     func() time.Time
-	run     smartctlRunner
-	entries map[string]*driveHealthEntry
+	slots chan struct{}
+	// spinStates returns Unraid's current spin states (see unraidSpinStates).
+	// It is checked again right before each smartctl run, so a disk spun
+	// down while its read waited for a slot is not read. nil skips the check.
+	spinStates func() map[string]bool
+	now        func() time.Time
+	run        smartctlRunner
+	entries    map[string]*driveHealthEntry
 }
 
 func newDriveHealthCache() *driveHealthCache {
@@ -239,6 +251,13 @@ func (c *driveHealthCache) refresh(disks []diskRef, now time.Time) {
 			case c.slots <- struct{}{}:
 			case <-queue.Done():
 				return
+			}
+			if c.spinStates != nil {
+				spunDown, managed := c.spinStates()[ref.name]
+				if spunDown || (ref.unraidOnly && !managed) {
+					<-c.slots
+					return
+				}
 			}
 			out, done, runErr := c.run(c.timeout, ref.name, ref.smartType)
 			go func() {

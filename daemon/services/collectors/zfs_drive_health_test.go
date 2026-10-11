@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
 	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
 )
 
@@ -590,9 +591,9 @@ func TestDescribeDisk(t *testing.T) {
 		{"sdb", spin, diskRef{name: "sdb", generation: "7", smartType: "scsi"}}, // SAS SSD
 		{"sdc", spin, diskRef{name: "sdc", generation: "7", smartType: "sat", asleep: true}},
 		// SAS hard drive: read only when Unraid manages it.
-		{"sdd", nil, diskRef{name: "sdd", generation: "7"}},
-		{"sdd", map[string]bool{"sdd": false}, diskRef{name: "sdd", generation: "7", smartType: "scsi"}},
-		{"sdd", map[string]bool{"sdd": true}, diskRef{name: "sdd", generation: "7", smartType: "scsi", asleep: true}},
+		{"sdd", nil, diskRef{name: "sdd", generation: "7", unraidOnly: true}},
+		{"sdd", map[string]bool{"sdd": false}, diskRef{name: "sdd", generation: "7", smartType: "scsi", unraidOnly: true}},
+		{"sdd", map[string]bool{"sdd": true}, diskRef{name: "sdd", generation: "7", smartType: "scsi", asleep: true, unraidOnly: true}},
 		{"sdu", spin, diskRef{name: "sdu"}},                  // USB bridge: not read
 		{"vda", spin, diskRef{name: "vda", generation: "7"}}, // no SMART transport
 		{"sdz", spin, diskRef{name: "sdz"}},                  // gone
@@ -759,5 +760,48 @@ func TestDriveHealthCacheSkipsSpunDownDisks(t *testing.T) {
 	}
 	if h := got["sdd"]; h == nil || h.Standby || !h.CollectedAt.Equal(clock) {
 		t.Errorf("re-read after spin-up = %+v", h)
+	}
+}
+
+// TestDriveHealthCacheRechecksSpinStateBeforeReading checks that Unraid's
+// spin state is read again right before smartctl runs, so a disk spun down
+// (or no longer managed) after the snapshot is not read.
+func TestDriveHealthCacheRechecksSpinStateBeforeReading(t *testing.T) {
+	clock := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	runner := &fakeSmartctl{outputs: map[string]string{
+		"sdd": readSmartctlFixture(t, "scsi.json"),
+		"sde": readSmartctlFixture(t, "scsi.json"),
+		"sdf": readSmartctlFixture(t, "scsi.json"),
+	}}
+	cache := newTestCache(t, runner, &clock)
+	cache.spinStates = func() map[string]bool {
+		// sdd spun down meanwhile, sde left Unraid, sdf still spinning.
+		return map[string]bool{"sdd": true, "sdf": false}
+	}
+	got := cache.lookup([]diskRef{
+		{name: "sdd", smartType: "scsi", unraidOnly: true},
+		{name: "sde", smartType: "scsi", unraidOnly: true},
+		{name: "sdf", smartType: "scsi", unraidOnly: true},
+	})
+	if calls := runner.takeCalls(); !sameSet(calls, []string{"sdf"}) {
+		t.Fatalf("calls = %v, want only sdf", calls)
+	}
+	if got["sdf"] == nil || got["sdd"] != nil || got["sde"] != nil {
+		t.Errorf("result = %v", got)
+	}
+	if len(cache.slots) != 0 {
+		t.Errorf("skipped reads left %d process slots taken", len(cache.slots))
+	}
+}
+
+func TestNewZFSCollectorChecksDisksIni(t *testing.T) {
+	c := NewZFSCollector(&domain.Context{Hub: domain.NewEventBus(10)})
+	path := filepath.Join(t.TempDir(), "disks.ini")
+	if err := os.WriteFile(path, []byte("[\"d\"]\ndevice=\"sdy\"\nspundown=\"1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c.disksIni = path
+	if got := c.driveHealth.spinStates(); !got["sdy"] {
+		t.Errorf("spinStates() = %v, want sdy spun down", got)
 	}
 }
