@@ -62,7 +62,7 @@ func (p exclusivePaths) disks() string {
 // The fields stay unset when the release has no exclusive-share setting or the
 // user share file system is not mounted (array stopped, user shares disabled).
 func (p exclusivePaths) applyExclusiveState(shares []dto.ShareInfo) {
-	globalEnabled, nfsBlocks, supported := p.exclusiveSetting()
+	settings, supported := p.exclusiveSettings()
 	if !supported {
 		return
 	}
@@ -73,7 +73,7 @@ func (p exclusivePaths) applyExclusiveState(shares []dto.ShareInfo) {
 		return
 	}
 
-	var branches []string // loaded lazily: only needed for shares on FUSE
+	var branches []storageBranch // loaded lazily: only needed for shares on FUSE
 	for i := range shares {
 		share := &shares[i]
 		if validateShareName(share.Name) != nil {
@@ -84,8 +84,8 @@ func (p exclusivePaths) applyExclusiveState(shares []dto.ShareInfo) {
 		if !ok {
 			continue
 		}
-		eligible := globalEnabled && share.UseCache == "only" && share.CachePool != "" &&
-			share.CachePool2 == "" && (!nfsBlocks || !share.NFSExport)
+		eligible := settings.enabled && share.UseCache == "only" && share.CachePool != "" &&
+			share.CachePool2 == "" && (!settings.nfsBlocks || !share.NFSExport)
 
 		share.Exclusive = &exclusive
 		share.ExclusiveEligible = &eligible
@@ -93,29 +93,51 @@ func (p exclusivePaths) applyExclusiveState(shares []dto.ShareInfo) {
 
 		if eligible && !exclusive {
 			if branches == nil {
-				branches = p.storageBranches()
+				branches = p.storageBranches(settings)
 			}
-			share.Locations = p.shareLocations(branches, share.Name)
+			share.Locations, share.LocationsUnchecked = p.shareLocations(branches, share.Name)
 		}
 	}
 }
 
-// exclusiveSetting reads the global "Permit exclusive shares" setting from
-// var.ini. supported is false when the key is absent (Unraid before 6.12).
-// nfsBlocks reports whether this release refuses exclusive access for NFS
-// exported shares, a restriction Unraid lifted in 7.2.0.
-func (p exclusivePaths) exclusiveSetting() (enabled, nfsBlocks, supported bool) {
+// exclusiveSettings holds the var.ini settings the exclusive share check uses.
+type exclusiveSettings struct {
+	enabled   bool // "Permit exclusive shares"
+	nfsBlocks bool // release refuses exclusive access for NFS exported shares
+	include   map[string]bool
+	exclude   map[string]bool
+}
+
+// exclusiveSettings reads the global share settings from var.ini. supported
+// is false when the exclusive share key is absent (Unraid before 6.12).
+// Unraid lifted the NFS export restriction in 7.2.0.
+func (p exclusivePaths) exclusiveSettings() (exclusiveSettings, bool) {
 	cfg, err := ini.Load(p.vars())
 	if err != nil {
 		logger.Debug("Share: cannot read %s for exclusive share setting: %v", p.vars(), err)
-		return false, false, false
+		return exclusiveSettings{}, false
 	}
 	section := cfg.Section("")
 	if !section.HasKey("shareUserExclusive") {
-		return false, false, false
+		return exclusiveSettings{}, false
 	}
-	enabled = section.Key("shareUserExclusive").String() == "yes"
-	return enabled, releaseBefore(section.Key("version").String(), 7, 2), true
+	return exclusiveSettings{
+		enabled:   section.Key("shareUserExclusive").String() == "yes",
+		nfsBlocks: releaseBefore(section.Key("version").String(), 7, 2),
+		include:   diskSet(section.Key("shareUserInclude").String()),
+		exclude:   diskSet(section.Key("shareUserExclude").String()),
+	}, true
+}
+
+// diskSet parses a comma-separated disk list such as "disk1,disk3".
+func diskSet(list string) map[string]bool {
+	set := map[string]bool{}
+	for disk := range strings.SplitSeq(list, ",") {
+		if disk = strings.TrimSpace(disk); disk != "" {
+			set[disk] = true
+		}
+	}
+	return set
 }
 
 // releaseBefore reports whether an Unraid version string such as
@@ -167,19 +189,40 @@ func (p exclusivePaths) shareLink(userRoot, name string) (exclusive bool, pool s
 	return true, pool, true
 }
 
+// storageBranch is an array disk or pool that is part of the user share
+// file system.
+type storageBranch struct {
+	name string
+	// asleep is set when the disk, or any device of the pool, is spun down.
+	// Its folders are not probed so the check never wakes a disk.
+	asleep bool
+}
+
 // storageBranches returns the mounted array disks and pools that make up the
-// user share file system, from disks.ini. Pool member devices (cache2, ...)
-// carry no fsStatus and the flash/parity entries have other types, so only
-// mounted Data and Cache entries are kept.
-func (p exclusivePaths) storageBranches() []string {
+// user share file system, from disks.ini: mounted Data disks allowed by the
+// global included/excluded disk settings and mounted pools that are not
+// excluded from user shares. Pool member devices (cache2, ...) carry no
+// fsStatus and flash/parity entries have other types, so they never match.
+func (p exclusivePaths) storageBranches(settings exclusiveSettings) []storageBranch {
 	// #nosec G304 -- path is the fixed emhttp disks.ini (overridable only in tests)
 	data, err := os.ReadFile(p.disks())
 	if err != nil {
 		logger.Debug("Share: cannot read %s for share locations: %v", p.disks(), err)
-		return []string{}
+		return []storageBranch{}
 	}
-	branches := []string{}
-	for section, kv := range parseINISections(string(data)) {
+	sections := parseINISections(string(data))
+
+	// Pool devices follow the pool entry in slot order, so a pool spans the
+	// idx range [idx, idx+slots).
+	spunDown := map[int]bool{}
+	for _, kv := range sections {
+		if idx, err := strconv.Atoi(kv["idx"]); err == nil {
+			spunDown[idx] = kv["spundown"] == "1"
+		}
+	}
+
+	branches := []storageBranch{}
+	for section, kv := range sections {
 		name := kv["name"]
 		if name == "" {
 			name = section
@@ -188,23 +231,55 @@ func (p exclusivePaths) storageBranches() []string {
 			continue
 		}
 		switch kv["type"] {
-		case "Data", "Cache":
-			branches = append(branches, name)
+		case "Data":
+			if (len(settings.include) > 0 && !settings.include[name]) || settings.exclude[name] {
+				continue
+			}
+		case "Cache":
+			if kv["shareEnabled"] == "no" {
+				continue
+			}
+		default:
+			continue
 		}
+		branches = append(branches, storageBranch{name: name, asleep: branchAsleep(kv, spunDown)})
 	}
-	sort.Strings(branches)
+	sort.Slice(branches, func(i, j int) bool { return branches[i].name < branches[j].name })
 	return branches
 }
 
-// shareLocations lists the disks and pools holding a top-level folder for the
-// share. Each check is a single lstat of /mnt/<branch>/<name>.
-func (p exclusivePaths) shareLocations(branches []string, name string) []string {
-	locations := []string{}
-	for _, branch := range branches {
-		info, err := os.Lstat(filepath.Join(p.mnt(), branch, name))
-		if err == nil && info.IsDir() {
-			locations = append(locations, branch)
+// branchAsleep reports whether a disk or any device of a pool is spun down.
+func branchAsleep(kv map[string]string, spunDown map[int]bool) bool {
+	idx, err := strconv.Atoi(kv["idx"])
+	if err != nil {
+		return kv["spundown"] == "1"
+	}
+	slots, err := strconv.Atoi(kv["slots"])
+	if err != nil || slots < 1 {
+		slots = 1
+	}
+	for i := idx; i < idx+slots; i++ {
+		if spunDown[i] {
+			return true
 		}
 	}
-	return locations
+	return false
+}
+
+// shareLocations lists the awake disks and pools holding a top-level folder
+// for the share (one lstat of /mnt/<branch>/<name> each) and the sleeping
+// ones that were left unchecked.
+func (p exclusivePaths) shareLocations(branches []storageBranch, name string) (found, unchecked []string) {
+	found = []string{}
+	for _, branch := range branches {
+		if branch.asleep {
+			unchecked = append(unchecked, branch.name)
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(p.mnt(), branch.name, name))
+		if err == nil && info.IsDir() {
+			found = append(found, branch.name)
+		}
+	}
+	return found, unchecked
 }

@@ -119,8 +119,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pool-only and, before Unraid 7.2, not NFS-exported), `exclusive_pool` and,
   when an eligible share has fallen back to FUSE, `locations` listing every
   pool or array disk that holds a top-level folder for it, so the stray copy
-  can be found. Read with `lstat`/`readlink` only, no FUSE traversal; omitted
-  on older releases or while the array is stopped.
+  can be found (`locations_unchecked` names spun-down disks and pools that
+  were skipped so they are not woken). Read with `lstat`/`readlink` only, no
+  FUSE traversal; omitted on older releases or while the array is stopped.
 
 - **Stable `device_id` for USB HID hwmon chips, and same-model fans kept apart** —
   `temperatures[]` and `fans[]` entries of `GET /api/v1/system` have a new `device_id`

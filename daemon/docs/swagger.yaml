@@ -3365,6 +3365,16 @@ definitions:
         items:
           type: string
         type: array
+      locations_unchecked:
+        description: |-
+          LocationsUnchecked lists the disks and pools that were spun down and so
+          not checked for a folder, to avoid waking them. Reported alongside
+          Locations.
+        example:
+        - disk3
+        items:
+          type: string
+        type: array
       mover_action:
         description: 'Mover action: "cache->array", "array->cache", or empty'
         example: cache->array

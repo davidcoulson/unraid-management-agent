@@ -1465,15 +1465,19 @@ that live on a single pool, so their I/O bypasses the FUSE user share layer.
 If a top-level folder for the share also exists on another pool or array disk,
 the share silently stays on FUSE.
 
-| Field                | Description                                                                                                                                                  |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `exclusive`          | `true` when `/mnt/user/<share>` is a symlink (exclusive access)                                                                                              |
-| `exclusive_eligible` | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; before Unraid 7.2 also not NFS-exported)            |
-| `exclusive_pool`     | Pool the symlink points at (only when exclusive)                                                                                                             |
-| `locations`          | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive. Entries other than `cache_pool` keep the share on FUSE |
+| Field                 | Description                                                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `exclusive`           | `true` when `/mnt/user/<share>` is a symlink (exclusive access)                                                                                              |
+| `exclusive_eligible`  | `true` when exclusive shares are enabled and the share is pool-only (primary pool, no secondary storage; before Unraid 7.2 also not NFS-exported)            |
+| `exclusive_pool`      | Pool the symlink points at (only when exclusive)                                                                                                             |
+| `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive. Entries other than `cache_pool` keep the share on FUSE |
+| `locations_unchecked` | Spun-down disks and pools (any device asleep) that were not checked, so the check never wakes a disk                                                         |
 
 The fields are omitted on releases without the setting and while the array is
 stopped. The check only uses `lstat`/`readlink` and never reads through FUSE.
+Only disks and pools that take part in user shares are checked: array disks
+allowed by the global included/excluded disk settings and pools whose user
+share participation is not disabled.
 
 ---
 
