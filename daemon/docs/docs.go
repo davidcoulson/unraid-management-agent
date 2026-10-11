@@ -9153,6 +9153,10 @@ const docTemplate = `{
                     "type": "string",
                     "example": "No separable connector"
                 },
+                "data_not_ready": {
+                    "description": "DataNotReady is true while the module flags its monitors as not ready\n(powering up or resetting); readings and flags are omitted then.",
+                    "type": "boolean"
+                },
                 "ddm_supported": {
                     "description": "DDMSupported is true when the module reports digital diagnostics.",
                     "type": "boolean",
@@ -9430,7 +9434,7 @@ const docTemplate = `{
                     "example": 90
                 },
                 "interface": {
-                    "description": "Interface is the port the sensor belongs to (module sensors), when known.",
+                    "description": "Interface is the first port of the sensor's PCI function (every sensor but\nthe card-wide ASIC).",
                     "type": "string",
                     "example": "eth0"
                 },

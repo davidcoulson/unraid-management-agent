@@ -190,6 +190,12 @@ func decodeSFF8636(eepromType uint32, data []byte, m *dto.NICModule) {
 	if !m.DDMSupported {
 		return
 	}
+	// Status byte 2 bit 0 (Data_Not_Ready): monitors are invalid while the
+	// module powers up or resets.
+	if data[2]&0x01 != 0 {
+		m.DataNotReady = true
+		return
+	}
 	m.TemperatureCelsius = ptrFloat(round(float64(be16s(data[22:24]))/256, 2))
 	m.VoltageVolts = ptrFloat(round(float64(binary.BigEndian.Uint16(data[26:28]))/10000, 4))
 	decodeFlags(data[6], "temperature", m)
@@ -280,7 +286,16 @@ func decodeSFF8472(eepromType uint32, data []byte, m *dto.NICModule) {
 		return
 	}
 	a2 := data[sffPageLen : 2*sffPageLen]
-	cal := newSFF8472Calibration(a2, diagType&0x10 != 0)
+	// A2h byte 110 bit 0 (Data_Ready_Bar): monitors are invalid until it clears.
+	if a2[110]&0x01 != 0 {
+		m.DataNotReady = true
+		return
+	}
+	cal, ok := newSFF8472Calibration(a2, diagType&0x10 != 0)
+	if !ok {
+		m.Error = "invalid external calibration constants"
+		return
+	}
 
 	m.TemperatureCelsius = ptrFloat(round(cal.temp(a2[96:98]), 2))
 	m.VoltageVolts = ptrFloat(round(cal.voltage(a2[98:100]), 4))
@@ -358,14 +373,22 @@ type sff8472Calibration struct {
 	voltSlope, voltOffset float64
 }
 
-func newSFF8472Calibration(a2 []byte, external bool) sff8472Calibration {
+// newSFF8472Calibration reads the calibration constants. It reports false
+// when an RX power coefficient is NaN or infinite (a corrupt EEPROM), which
+// would otherwise poison every derived value. Finite float32 coefficients
+// applied to 16-bit readings cannot overflow a float64.
+func newSFF8472Calibration(a2 []byte, external bool) (sff8472Calibration, bool) {
 	c := sff8472Calibration{external: external}
 	if !external {
-		return c
+		return c, true
 	}
 	for i := range 5 {
 		// Rx_PWR(4) is at 56, Rx_PWR(0) at 72, as big-endian IEEE 754 floats.
-		c.rx[4-i] = float64(math.Float32frombits(binary.BigEndian.Uint32(a2[56+4*i:])))
+		v := float64(math.Float32frombits(binary.BigEndian.Uint32(a2[56+4*i:])))
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return c, false
+		}
+		c.rx[4-i] = v
 	}
 	slope := func(off int) float64 { return float64(binary.BigEndian.Uint16(a2[off:])) / 256 }
 	offset := func(off int) float64 { return float64(be16s(a2[off:])) }
@@ -373,7 +396,7 @@ func newSFF8472Calibration(a2 []byte, external bool) sff8472Calibration {
 	c.txSlope, c.txOffset = slope(80), offset(82)
 	c.tempSlope, c.tempOffset = slope(84), offset(86)
 	c.voltSlope, c.voltOffset = slope(88), offset(90)
-	return c
+	return c, true
 }
 
 // linear applies slope/offset calibration to an unsigned raw value.

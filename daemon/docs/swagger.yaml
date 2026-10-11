@@ -2375,6 +2375,11 @@ definitions:
         description: Connector is the SFF-8024 connector type.
         example: No separable connector
         type: string
+      data_not_ready:
+        description: |-
+          DataNotReady is true while the module flags its monitors as not ready
+          (powering up or resetting); readings and flags are omitted then.
+        type: boolean
       ddm_supported:
         description: DDMSupported is true when the module reports digital diagnostics.
         example: true
@@ -2595,8 +2600,9 @@ definitions:
         example: 90
         type: number
       interface:
-        description: Interface is the port the sensor belongs to (module sensors),
-          when known.
+        description: |-
+          Interface is the first port of the sensor's PCI function (every sensor but
+          the card-wide ASIC).
         example: eth0
         type: string
       label:

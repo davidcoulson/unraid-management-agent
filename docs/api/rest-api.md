@@ -2350,9 +2350,10 @@ processes are spawned per cycle.
   from `lspci -Dmm` (once per card); `model` is a short product name derived from the device
   name. `firmware_version` is what `ethtool -i` shows.
 - **Temperatures:** the hwmon chips of the card's PCI functions (or of devices below them,
-  such as PHYs): `sensor` is `asic`, `phy`, `mac`, `module` (transceiver cage, with the
-  port's `interface`) or `other`. A sensor every function exposes (the shared ASIC of a
-  multi-function card) is reported once, with the highest reading.
+  such as PHYs): `sensor` is `asic`, `phy`, `mac`, `module` (transceiver cage) or `other`.
+  The ASIC sensor every function of a multi-function card exposes is the one shared die and
+  is reported once, with the highest reading; every other sensor is kept per PCI function
+  and names its port in `interface`.
 - **Optics:** each port's module EEPROM is read with `ETHTOOL_GMODULEINFO` and
   `ETHTOOL_GMODULEEEPROM` (the driver hooks `ethtool -m` uses) and decoded per SFF-8472
   (SFP/SFP+/SFP28, including external calibration) or SFF-8636/SFF-8436 (QSFP+/QSFP28).
@@ -2361,7 +2362,9 @@ processes are spawned per cycle.
   the set flags (`temperature_high`, `voltage_low`, `lane<N>_rx_power_low`,
   `lane<N>_tx_bias_high`, `lane<N>_tx_power_high`, ...); SFF-8636 flags are latched (events
   since the previous read). Optical power is reported in mW and dBm, with dBm floored at -40
-  for no light. Vendor serial numbers are never decoded or reported.
+  for no light. While a module flags its monitors as not ready (powering up or resetting),
+  `data_not_ready` is `true` and readings and flags are omitted. Vendor serial numbers are
+  never decoded or reported.
 
 `state` is `pending` until the first collection and `ok` afterwards. `errors` lists
 unexpected module read failures.
@@ -2420,8 +2423,8 @@ unexpected module read failures.
       "driver": "atlantic",
       "firmware_version": "1.3.24",
       "temperatures": [
-        { "sensor": "phy", "label": "PHY Temperature", "pci_address": "0000:d5:00.0", "celsius": 42 },
-        { "sensor": "mac", "label": "MAC Temperature", "pci_address": "0000:d5:00.0", "celsius": 42 }
+        { "sensor": "phy", "label": "PHY Temperature", "interface": "eth2", "pci_address": "0000:d5:00.0", "celsius": 42 },
+        { "sensor": "mac", "label": "MAC Temperature", "interface": "eth2", "pci_address": "0000:d5:00.0", "celsius": 42 }
       ],
       "ports": [
         { "id": "0000:d5:00.0", "interface": "eth2", "pci_address": "0000:d5:00.0", "dev_port": 0, "operstate": "down", "carrier": false, "mtu": 1500 }
