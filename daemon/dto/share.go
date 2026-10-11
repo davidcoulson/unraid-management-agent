@@ -32,7 +32,8 @@ type ShareInfo struct {
 	// exclusive flag emhttp records in shares.ini.
 	Exclusive *bool `json:"exclusive,omitempty" example:"true"`
 	// ExclusiveEligible is true when exclusive shares are enabled globally and
-	// the share lives on a single pool (primary pool only, no secondary storage;
+	// the share lives on a single pool (primary pool only, no secondary storage
+	// — on servers without array slots any primary pool with no secondary pool;
 	// before Unraid 7.2 also not exported over NFS). Omitted when that NFS
 	// rule applies but the share's config cannot be read.
 	ExclusiveEligible *bool `json:"exclusive_eligible,omitempty" example:"true"`

@@ -283,6 +283,37 @@ func TestApplyExclusiveStateIncludedDisks(t *testing.T) {
 	}
 }
 
+func TestApplyExclusiveStatePoolsOnlyServer(t *testing.T) {
+	prefer := dto.ShareInfo{Name: "appdata", UseCache: "prefer", CachePool: "cache", Exclusive: boolPtr(false)}
+	yes := dto.ShareInfo{Name: "system", UseCache: "yes", CachePool: "cache", Exclusive: boolPtr(true)}
+	twoPools := dto.ShareInfo{Name: "media", UseCache: "yes", CachePool: "cache", CachePool2: "slow", Exclusive: boolPtr(false)}
+	for _, tt := range []struct {
+		slots    string
+		eligible bool
+	}{
+		{"SYS_ARRAY_SLOTS=\"0\"\n", true},
+		{"SYS_ARRAY_SLOTS=\"2\"\n", true},
+		{"SYS_ARRAY_SLOTS=\"6\"\n", false},
+		{"", false},
+	} {
+		p := exclusiveFixture(t, startedVarIni+tt.slots)
+		shares := []dto.ShareInfo{prefer, yes, twoPools}
+		p.applyExclusiveState(shares, nil)
+		if deref(shares[0].ExclusiveEligible) != tt.eligible || deref(shares[1].ExclusiveEligible) != tt.eligible {
+			t.Errorf("%q: eligible=%v/%v, want %v", tt.slots, deref(shares[0].ExclusiveEligible), deref(shares[1].ExclusiveEligible), tt.eligible)
+		}
+		if tt.eligible && !reflect.DeepEqual(locs(shares[0].Locations), []string{"cache", "disk1", "disk5"}) {
+			t.Errorf("%q: locations=%v", tt.slots, locs(shares[0].Locations))
+		}
+		if tt.eligible && shares[1].ExclusivePool != "cache" {
+			t.Errorf("%q: exclusive_pool=%q", tt.slots, shares[1].ExclusivePool)
+		}
+		if deref(shares[2].ExclusiveEligible) != false {
+			t.Errorf("%q: share with a secondary pool reported eligible", tt.slots)
+		}
+	}
+}
+
 func TestApplyExclusiveStateExportUnknown(t *testing.T) {
 	for version, eligible := range map[string]*bool{"7.1.4": nil, "7.4.0": boolPtr(true)} {
 		p := exclusiveFixture(t, startedVarIni+"version=\""+version+"\"\n")

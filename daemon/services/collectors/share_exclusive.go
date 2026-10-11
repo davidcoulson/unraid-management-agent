@@ -94,8 +94,12 @@ func (p sharePaths) applyExclusiveState(shares []dto.ShareInfo, exportUnknown ma
 		if exclusive {
 			share.ExclusivePool = share.CachePool
 		}
-		eligible := settings.enabled && share.UseCache == "only" && share.CachePool != "" &&
-			share.CachePool2 == ""
+		// Pool-only: primary storage is a pool and there is no secondary
+		// storage. Without array slots Unraid treats any useCache value with
+		// no secondary pool as "only" (as the webGUI's share list does).
+		poolOnly := share.CachePool != "" && share.CachePool2 == "" &&
+			(share.UseCache == "only" || settings.poolsOnly)
+		eligible := settings.enabled && poolOnly
 		if eligible && settings.nfsBlocks {
 			if exportUnknown[share.Name] {
 				continue // NFS export, and so eligibility, unknown
@@ -121,6 +125,7 @@ type exclusiveSettings struct {
 	enabled           bool // "Permit exclusive shares"
 	nfsBlocks         bool // release refuses exclusive access for NFS exported shares
 	userSharesMounted bool // user shares enabled and the array started
+	poolsOnly         bool // server has no array slots (SYS_ARRAY_SLOTS <= 2)
 	include           map[string]bool
 	exclude           map[string]bool
 }
@@ -143,9 +148,17 @@ func (p sharePaths) exclusiveSettings() (exclusiveSettings, bool) {
 		nfsBlocks: releaseBefore(section.Key("version").String(), 7, 2),
 		userSharesMounted: section.Key("shareUser").String() == "e" &&
 			section.Key("fsState").String() == "Started",
-		include: diskSet(section.Key("shareUserInclude").String()),
-		exclude: diskSet(section.Key("shareUserExclude").String()),
+		poolsOnly: poolsOnlyServer(section.Key("SYS_ARRAY_SLOTS").String()),
+		include:   diskSet(section.Key("shareUserInclude").String()),
+		exclude:   diskSet(section.Key("shareUserExclude").String()),
 	}, true
+}
+
+// poolsOnlyServer mirrors the webGUI: a server with at most two array slots
+// has no array, so shares can only live on pools. Unknown counts as false.
+func poolsOnlyServer(slots string) bool {
+	n, err := strconv.Atoi(slots)
+	return err == nil && n <= 2
 }
 
 // diskSet parses a comma-separated disk list such as "disk1,disk3".
