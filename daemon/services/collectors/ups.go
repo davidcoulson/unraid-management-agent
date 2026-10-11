@@ -207,12 +207,11 @@ func (c *UPSCollector) collectNUT() (*dto.UPSStatus, error) {
 	}
 
 	status, err := parseNUTUpscOutput(output)
-	if err != nil {
-		return nil, err
+	if status != nil {
+		// Say which NUT device this is; GET /nut lists every device.
+		status.DeviceName = devices[0]
 	}
-	// Say which NUT device this is; GET /nut lists every device.
-	status.DeviceName = devices[0]
-	return status, nil
+	return status, err
 }
 
 // parseNUTUpscOutput parses the stdout of upsc into a UPSStatus DTO.
