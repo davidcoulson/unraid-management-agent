@@ -805,6 +805,12 @@ func TestDriveHealthCacheRechecksSpinStateBeforeReading(t *testing.T) {
 	if got["sdf"] == nil || got["sdd"] != nil || got["sde"] != nil {
 		t.Errorf("result = %v", got)
 	}
+	// The read that ran frees its slot once its process is reaped (in the
+	// background); the skipped ones must not hold any.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(cache.slots) > 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if len(cache.slots) != 0 {
 		t.Errorf("skipped reads left %d process slots taken", len(cache.slots))
 	}
