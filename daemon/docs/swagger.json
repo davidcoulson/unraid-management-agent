@@ -10494,6 +10494,16 @@
                         "disk1"
                     ]
                 },
+                "locations_unchecked": {
+                    "description": "LocationsUnchecked lists the disks and pools that were spun down and so\nnot checked for a folder, to avoid waking them. Reported alongside\nLocations.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "disk3"
+                    ]
+                },
                 "mover_action": {
                     "description": "Mover action: \"cache-\u003earray\", \"array-\u003ecache\", or empty",
                     "type": "string",

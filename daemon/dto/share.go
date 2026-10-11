@@ -40,6 +40,10 @@ type ShareInfo struct {
 	// the share. Reported only when the share is eligible but not exclusive:
 	// any entry other than the share's pool is what keeps it on FUSE.
 	Locations []string `json:"locations,omitempty" example:"cache,disk1"`
+	// LocationsUnchecked lists the disks and pools that were spun down and so
+	// not checked for a folder, to avoid waking them. Reported alongside
+	// Locations.
+	LocationsUnchecked []string `json:"locations_unchecked,omitempty" example:"disk3"`
 
 	// SourceStatus is non-nil only when the backing data source is not healthy.
 	SourceStatus *SourceStatus `json:"source_status,omitempty"`

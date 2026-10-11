@@ -10,28 +10,69 @@ import (
 )
 
 const exclusiveDisksIni = `["parity"]
+idx="0"
 name="parity"
 type="Parity"
 status="DISK_NP"
 ["disk1"]
+idx="1"
 name="disk1"
 type="Data"
+spundown="0"
 fsStatus="Mounted"
 ["disk2"]
+idx="2"
 name="disk2"
 type="Data"
 fsStatus="Mounted"
 ["disk3"]
+idx="3"
 name="disk3"
 type="Data"
 fsStatus="Unmountable: unsupported or no file system"
+["disk4"]
+idx="4"
+name="disk4"
+type="Data"
+spundown="1"
+fsStatus="Mounted"
+["disk5"]
+idx="5"
+name="disk5"
+type="Data"
+fsStatus="Mounted"
 ["cache"]
+idx="30"
 name="cache"
 type="Cache"
+slots="2"
+spundown="0"
 fsStatus="Mounted"
+shareEnabled="yes"
 ["cache2"]
+idx="31"
 name="cache2"
 type="Cache"
+spundown="0"
+["slow"]
+idx="32"
+name="slow"
+type="Cache"
+slots="2"
+spundown="0"
+fsStatus="Mounted"
+["slow2"]
+idx="33"
+name="slow2"
+type="Cache"
+spundown="1"
+["scratch"]
+idx="34"
+name="scratch"
+type="Cache"
+slots="0"
+fsStatus="Mounted"
+shareEnabled="no"
 ["nvme"]
 type="Cache"
 fsStatus="Mounted"
@@ -57,6 +98,10 @@ func exclusiveFixture(t *testing.T, varIni string) exclusivePaths {
 		"cache2/appdata",   // pool member device, never a branch
 		"flash/appdata",    // boot device, never a branch
 		"disk3/appdata",    // unmountable disk, never a branch
+		"disk4/appdata",    // spun down: never probed
+		"disk5/appdata",    // excluded from user shares by var.ini
+		"slow/appdata",     // pool with a spun-down device: never probed
+		"scratch/appdata",  // pool excluded from user shares
 		"cache/downloads",  // FUSE fallback with no stray folder found
 		"user/downloads",   // ...
 		"elsewhere/other1", // odd symlink target
@@ -102,7 +147,7 @@ func poolOnly(name, pool string) dto.ShareInfo {
 func boolPtr(b bool) *bool { return &b }
 
 func TestApplyExclusiveState(t *testing.T) {
-	p := exclusiveFixture(t, "shareUser=\"e\"\nshareUserExclusive=\"yes\"\n")
+	p := exclusiveFixture(t, "shareUser=\"e\"\nshareUserExclusive=\"yes\"\nshareUserExclude=\"disk5, disk9\"\n")
 	shares := []dto.ShareInfo{
 		poolOnly("system", "cache"),
 		poolOnly("vms", "nvme"),
@@ -116,30 +161,34 @@ func TestApplyExclusiveState(t *testing.T) {
 	}
 	p.applyExclusiveState(shares)
 
+	sleeping := []string{"disk4", "slow"}
 	want := []struct {
 		exclusive, eligible *bool
 		pool                string
 		locations           []string
+		unchecked           []string
 	}{
-		{boolPtr(true), boolPtr(true), "cache", nil},
-		{boolPtr(true), boolPtr(true), "nvme", nil},
-		{boolPtr(false), boolPtr(true), "", []string{"cache", "disk1"}},
-		{boolPtr(false), boolPtr(true), "", []string{"cache"}},
-		{boolPtr(false), boolPtr(false), "", nil},
-		{boolPtr(false), boolPtr(false), "", nil},
-		{boolPtr(false), boolPtr(true), "", []string{}},
-		{boolPtr(true), boolPtr(true), "", nil},
-		{nil, nil, "", nil},
+		{boolPtr(true), boolPtr(true), "cache", nil, nil},
+		{boolPtr(true), boolPtr(true), "nvme", nil, nil},
+		{boolPtr(false), boolPtr(true), "", []string{"cache", "disk1"}, sleeping},
+		{boolPtr(false), boolPtr(true), "", []string{"cache"}, sleeping},
+		{boolPtr(false), boolPtr(false), "", nil, nil},
+		{boolPtr(false), boolPtr(false), "", nil, nil},
+		{boolPtr(false), boolPtr(true), "", []string{}, sleeping},
+		{boolPtr(true), boolPtr(true), "", nil, nil},
+		{nil, nil, "", nil, nil},
 	}
 	for i, w := range want {
 		got := shares[i]
 		if !reflect.DeepEqual(got.Exclusive, w.exclusive) ||
 			!reflect.DeepEqual(got.ExclusiveEligible, w.eligible) ||
 			got.ExclusivePool != w.pool ||
-			!reflect.DeepEqual(got.Locations, w.locations) {
-			t.Errorf("%s: got exclusive=%v eligible=%v pool=%q locations=%#v, want %v %v %q %#v",
-				got.Name, deref(got.Exclusive), deref(got.ExclusiveEligible), got.ExclusivePool, got.Locations,
-				deref(w.exclusive), deref(w.eligible), w.pool, w.locations)
+			!reflect.DeepEqual(got.Locations, w.locations) ||
+			!reflect.DeepEqual(got.LocationsUnchecked, w.unchecked) {
+			t.Errorf("%s: got exclusive=%v eligible=%v pool=%q locations=%#v unchecked=%#v, want %v %v %q %#v %#v",
+				got.Name, deref(got.Exclusive), deref(got.ExclusiveEligible), got.ExclusivePool,
+				got.Locations, got.LocationsUnchecked,
+				deref(w.exclusive), deref(w.eligible), w.pool, w.locations, w.unchecked)
 		}
 	}
 }
@@ -217,6 +266,25 @@ func TestApplyExclusiveStateLstatError(t *testing.T) {
 	p.applyExclusiveState(shares)
 	if shares[0].Exclusive != nil {
 		t.Errorf("exclusive reported although /mnt/user/system could not be inspected: %v", *shares[0].Exclusive)
+	}
+}
+
+func TestApplyExclusiveStateIncludedDisks(t *testing.T) {
+	p := exclusiveFixture(t, "shareUserExclusive=\"yes\"\nshareUserInclude=\"disk5\"\n")
+	shares := []dto.ShareInfo{poolOnly("appdata", "cache")}
+	p.applyExclusiveState(shares)
+	// disk1 is not in the included disks; pools are unaffected.
+	if want := []string{"cache", "disk5"}; !reflect.DeepEqual(shares[0].Locations, want) {
+		t.Errorf("locations = %v, want %v", shares[0].Locations, want)
+	}
+}
+
+func TestBranchAsleepWithoutIndex(t *testing.T) {
+	if !branchAsleep(map[string]string{"spundown": "1"}, nil) {
+		t.Error("disk without idx but spundown=1 should count as asleep")
+	}
+	if branchAsleep(map[string]string{"idx": "7"}, map[int]bool{}) {
+		t.Error("disk with no spin state should count as awake")
 	}
 }
 
