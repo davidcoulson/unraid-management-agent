@@ -16,6 +16,7 @@ import (
 	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
 	"github.com/tinkerologie/unraid-management-agent/daemon/lib"
 	"github.com/tinkerologie/unraid-management-agent/daemon/logger"
+	"gopkg.in/ini.v1"
 )
 
 const (
@@ -26,10 +27,6 @@ const (
 	driveHealthTTL = 5 * time.Minute
 	// driveHealthTimeout bounds one smartctl run.
 	driveHealthTimeout = 15 * time.Second
-	// driveHealthActivityWindow is how recent I/O must be for a rotational
-	// SCSI disk to be read. It is shorter than Unraid's shortest spin-down
-	// delay (15 minutes), so a disk that did I/O within it is still spinning.
-	driveHealthActivityWindow = 10 * time.Minute
 	// driveHealthWorkers bounds how many smartctl processes exist at once,
 	// including ones that timed out but have not exited yet.
 	driveHealthWorkers = 4
@@ -47,32 +44,45 @@ type diskRef struct {
 	generation string
 	// smartType is the smartctl -d type (nvme, sat or scsi), chosen from
 	// sysfs so smartctl does not probe the drive to detect it. Empty means
-	// the disk is not read (USB bridges and other transports may ignore the
-	// standby check and wake the drive).
+	// the disk is never read: USB bridges may ignore the standby check, and
+	// smartctl's SCSI power check cannot fail closed (a stopped drive can
+	// look active), so a rotational SCSI disk is read only when Unraid
+	// manages it and reports its spin state.
 	smartType string
-	// spinning is true for a rotational SCSI disk. smartctl has no
-	// fail-closed power check for SCSI (a stopped drive can look active), so
-	// such a disk is only read when it did I/O between the last two
-	// observations, taken at most driveHealthActivityWindow apart.
-	spinning bool
-	// io is the disk's completed read/write counts from its sysfs stat file.
-	// smartctl's SG_IO commands are not counted, so an unchanged value means
-	// nothing has touched the disk.
-	io string
+	// asleep is true when Unraid reports the disk spun down. It is not read.
+	asleep bool
 }
 
-// describeDisk works out how to read a disk's SMART data from sysfs alone.
-func describeDisk(sysRoot, disk string) diskRef {
+// unraidSpinStates returns which disks Unraid reports as spun down, keyed
+// by kernel device name, from disks.ini. Unraid tracks spin state for every
+// array and pool device, including spin-downs from its UI, its timers and
+// this agent's API. Disks Unraid does not manage are absent.
+func unraidSpinStates(path string) map[string]bool {
+	cfg, err := ini.Load(path)
+	if err != nil {
+		return nil
+	}
+	states := make(map[string]bool)
+	for _, section := range cfg.Sections() {
+		device := strings.Trim(section.Key("device").String(), `"`)
+		if device == "" || !section.HasKey("spundown") {
+			continue
+		}
+		states[device] = strings.Trim(section.Key("spundown").String(), `"`) == "1"
+	}
+	return states
+}
+
+// describeDisk works out how to read a disk's SMART data from sysfs and
+// Unraid's spin states (see unraidSpinStates), without touching the disk.
+func describeDisk(sysRoot, disk string, spinStates map[string]bool) diskRef {
 	ref := diskRef{name: disk}
 	block := filepath.Join(sysRoot, "class", "block", disk)
 	if seq, err := os.ReadFile(filepath.Join(block, "diskseq")); err == nil { // #nosec G304 -- sysfs path built from a validated kernel device name
 		ref.generation = strings.TrimSpace(string(seq))
 	}
-	if stat, err := os.ReadFile(filepath.Join(block, "stat")); err == nil { // #nosec G304 -- sysfs path built from a validated kernel device name
-		if f := strings.Fields(string(stat)); len(f) >= 5 {
-			ref.io = f[0] + "/" + f[4]
-		}
-	}
+	spunDown, managed := spinStates[disk]
+	ref.asleep = spunDown
 	real, err := filepath.EvalSymlinks(block)
 	switch {
 	case err != nil || strings.Contains(real, "/usb"):
@@ -80,13 +90,13 @@ func describeDisk(sysRoot, disk string) diskRef {
 		ref.smartType = "nvme"
 	case strings.HasPrefix(disk, "sd"):
 		// libata disks (also SATA disks behind a SAS HBA's SATL) report "ATA".
-		vendor, _ := os.ReadFile(filepath.Join(block, "device", "vendor")) // #nosec G304 -- sysfs path built from a validated kernel device name
-		if strings.TrimSpace(string(vendor)) == "ATA" {
+		vendor, _ := os.ReadFile(filepath.Join(block, "device", "vendor"))        // #nosec G304 -- sysfs path built from a validated kernel device name
+		rotational, _ := os.ReadFile(filepath.Join(block, "queue", "rotational")) // #nosec G304 -- sysfs path built from a validated kernel device name
+		switch {
+		case strings.TrimSpace(string(vendor)) == "ATA":
 			ref.smartType = "sat"
-		} else {
+		case strings.TrimSpace(string(rotational)) != "1" || managed:
 			ref.smartType = "scsi"
-			rotational, _ := os.ReadFile(filepath.Join(block, "queue", "rotational")) // #nosec G304 -- sysfs path built from a validated kernel device name
-			ref.spinning = strings.TrimSpace(string(rotational)) == "1"
 		}
 	}
 	return ref
@@ -112,8 +122,6 @@ type driveHealthEntry struct {
 	health     *dto.DriveHealth // last successful read, nil if none
 	standby    bool             // asleep at the last attempt
 	attempted  time.Time        // last time smartctl was run
-	seenIO     string           // diskRef.io at the last lookup
-	seenAt     time.Time        // time of the last lookup
 	inflight   <-chan struct{}  // closed once the last smartctl process exited
 }
 
@@ -158,7 +166,7 @@ func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 	wanted := make(map[string]bool, len(disks))
 	var stale []diskRef
 	for _, ref := range disks {
-		if wanted[ref.name] || ref.smartType == "" || !blockDeviceName.MatchString(ref.name) {
+		if wanted[ref.name] || !blockDeviceName.MatchString(ref.name) {
 			continue
 		}
 		wanted[ref.name] = true
@@ -168,19 +176,20 @@ func (c *driveHealthCache) lookup(disks []diskRef) map[string]*dto.DriveHealth {
 			entry = &driveHealthEntry{generation: ref.generation}
 			c.entries[ref.name] = entry
 		}
-		recentIO := !entry.seenAt.IsZero() && now.Sub(entry.seenAt) <= driveHealthActivityWindow &&
-			ref.io != "" && ref.io != entry.seenIO
-		entry.seenIO, entry.seenAt = ref.io, now
+		if ref.asleep {
+			// Keep the last reading; read again as soon as the disk spins up.
+			entry.standby = true
+			entry.attempted = time.Time{}
+			continue
+		}
+		if ref.smartType == "" {
+			continue
+		}
 		if !entry.attempted.IsZero() && now.Sub(entry.attempted) < c.ttl {
 			continue
 		}
 		if entry.inflight != nil && !closed(entry.inflight) {
 			// A previous smartctl for this disk is still stuck; don't pile up.
-			continue
-		}
-		if ref.spinning && !recentIO {
-			// Not known to be spinning right now, and a SCSI read could wake
-			// it. Keep the last reading, if any.
 			continue
 		}
 		stale = append(stale, ref)
@@ -486,6 +495,7 @@ func resolveWholeDisk(sysRoot, devRoot, member string) string {
 // attachDrives fills each pool's Drives with its members, the disk each one
 // is on, and that disk's cached SMART health.
 func (c *ZFSCollector) attachDrives(pools []dto.ZFSPool) {
+	spinStates := unraidSpinStates(c.disksIni)
 	var disks []diskRef
 	for i := range pools {
 		pools[i].Drives = poolDrives(&pools[i])
@@ -493,7 +503,7 @@ func (c *ZFSCollector) attachDrives(pools []dto.ZFSPool) {
 			drive := &pools[i].Drives[j]
 			drive.Disk = resolveWholeDisk(c.sysRoot, c.devRoot, drive.Name)
 			if drive.Disk != "" {
-				disks = append(disks, describeDisk(c.sysRoot, drive.Disk))
+				disks = append(disks, describeDisk(c.sysRoot, drive.Disk, spinStates))
 			}
 		}
 	}

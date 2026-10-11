@@ -24,9 +24,11 @@ type ZFSCollector struct {
 	execOutput func(command string, args ...string) (string, error)
 
 	// sysRoot and devRoot locate sysfs and /dev for resolving pool members to
-	// disks; driveHealth caches their SMART data (nil disables it).
+	// disks, disksIni is Unraid's disks.ini (spin states), and driveHealth
+	// caches the disks' SMART data (nil disables it).
 	sysRoot     string
 	devRoot     string
+	disksIni    string
 	driveHealth *driveHealthCache
 }
 
@@ -37,6 +39,7 @@ func NewZFSCollector(ctx *domain.Context) *ZFSCollector {
 		execOutput:  lib.ExecCommandOutput,
 		sysRoot:     "/sys",
 		devRoot:     "/dev",
+		disksIni:    constants.DisksIni,
 		driveHealth: newDriveHealthCache(),
 	}
 }

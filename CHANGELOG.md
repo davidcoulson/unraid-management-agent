@@ -20,13 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning, and media errors (NVMe media errors, SCSI uncorrected errors or ATA
   attribute 187). smartctl gets an explicit device type from sysfs (`nvme`,
   `sat` or `scsi`) so it does not probe the drive, and USB-attached disks are
-  not read. Drives in standby are not woken: ATA drives use a fail-closed power
-  check (`-n standby,2,3`, so a drive whose power mode can't be read is not
-  read either), and rotational SCSI drives, whose power check can't fail
-  closed, are only read when the kernel's I/O counters changed between two
-  observations at most 10 minutes apart (shorter than Unraid's shortest
-  spin-down delay), so an idle SAS drive is never read and keeps its last
-  reading. Readings are cached per disk for
+  not read. Drives are never woken: a disk Unraid reports spun down
+  (`disks.ini`) is not read and keeps its last reading, flagged `standby`; ATA
+  drives use a fail-closed power check (`-n standby,2,3`, so a drive whose
+  power mode can't be read is not read either); and rotational SCSI drives,
+  whose power check can't fail closed, are read only when Unraid manages them
+  and reports them spinning. Readings are cached per disk for
   5 minutes and dropped when the kernel's `diskseq` shows a different disk
   under the same name. At most 4 smartctl processes exist at once (a timed-out
   one keeps its slot until it exits; 15 s timeout). Serial numbers are never

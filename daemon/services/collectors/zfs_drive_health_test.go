@@ -192,10 +192,6 @@ func fakeSysfs(t *testing.T) (sysRoot, devRoot string) {
 		if err := os.WriteFile(filepath.Join(dir, "diskseq"), []byte("7\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		stat := "     100        0     8000       10      200        0     1600       20        0       30       30\n"
-		if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
-			t.Fatal(err)
-		}
 		for _, part := range parts {
 			touch(filepath.Join(dir, part, "partition"))
 			link(filepath.Join(dir, part), filepath.Join(block, part))
@@ -584,22 +580,57 @@ func TestCollectPoolsAttachesDrives(t *testing.T) {
 
 func TestDescribeDisk(t *testing.T) {
 	sysRoot, _ := fakeSysfs(t)
+	spin := map[string]bool{"nvme0n1": false, "sdc": true}
 	tests := []struct {
 		disk string
+		spin map[string]bool
 		want diskRef
 	}{
-		{"nvme0n1", diskRef{name: "nvme0n1", generation: "7", smartType: "nvme", io: "100/200"}},
-		{"sdb", diskRef{name: "sdb", generation: "7", smartType: "scsi", io: "100/200"}},
-		{"sdd", diskRef{name: "sdd", generation: "7", smartType: "scsi", spinning: true, io: "100/200"}},
-		{"sdc", diskRef{name: "sdc", generation: "7", smartType: "sat", io: "100/200"}},
-		{"sdu", diskRef{name: "sdu"}},                                 // USB bridge: not read
-		{"vda", diskRef{name: "vda", generation: "7", io: "100/200"}}, // no SMART transport
-		{"sdz", diskRef{name: "sdz"}},                                 // gone
+		{"nvme0n1", spin, diskRef{name: "nvme0n1", generation: "7", smartType: "nvme"}},
+		{"sdb", spin, diskRef{name: "sdb", generation: "7", smartType: "scsi"}}, // SAS SSD
+		{"sdc", spin, diskRef{name: "sdc", generation: "7", smartType: "sat", asleep: true}},
+		// SAS hard drive: read only when Unraid manages it.
+		{"sdd", nil, diskRef{name: "sdd", generation: "7"}},
+		{"sdd", map[string]bool{"sdd": false}, diskRef{name: "sdd", generation: "7", smartType: "scsi"}},
+		{"sdd", map[string]bool{"sdd": true}, diskRef{name: "sdd", generation: "7", smartType: "scsi", asleep: true}},
+		{"sdu", spin, diskRef{name: "sdu"}},                  // USB bridge: not read
+		{"vda", spin, diskRef{name: "vda", generation: "7"}}, // no SMART transport
+		{"sdz", spin, diskRef{name: "sdz"}},                  // gone
 	}
 	for _, tt := range tests {
-		if got := describeDisk(sysRoot, tt.disk); got != tt.want {
-			t.Errorf("describeDisk(%q) = %+v, want %+v", tt.disk, got, tt.want)
+		if got := describeDisk(sysRoot, tt.disk, tt.spin); got != tt.want {
+			t.Errorf("describeDisk(%q, %v) = %+v, want %+v", tt.disk, tt.spin, got, tt.want)
 		}
+	}
+}
+
+func TestUnraidSpinStates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "disks.ini")
+	ini := `["parity"]
+name="parity"
+device=""
+spundown="0"
+["exos24tb"]
+name="exos24tb"
+device="sdy"
+spundown="0"
+["exos24tb2"]
+name="exos24tb2"
+device="sdz"
+spundown="1"
+["flash"]
+name="flash"
+device="sda"
+`
+	if err := os.WriteFile(path, []byte(ini), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"sdy": false, "sdz": true}
+	if got := unraidSpinStates(path); !reflect.DeepEqual(got, want) {
+		t.Errorf("unraidSpinStates() = %v, want %v", got, want)
+	}
+	if got := unraidSpinStates(filepath.Join(t.TempDir(), "missing.ini")); got != nil {
+		t.Errorf("missing disks.ini = %v, want nil", got)
 	}
 }
 
@@ -685,58 +716,48 @@ func TestDriveHealthCacheHoldsSlotsForStuckProcesses(t *testing.T) {
 	}
 }
 
-// TestDriveHealthCacheSpinningSCSIOnlyWhenRecentlyActive checks that a
-// rotational SCSI disk, whose power check cannot fail closed, is read only
-// when it did I/O between two observations close enough together that it
-// cannot have spun down since.
-func TestDriveHealthCacheSpinningSCSIOnlyWhenRecentlyActive(t *testing.T) {
+// TestDriveHealthCacheSkipsSpunDownDisks checks that a disk Unraid reports
+// spun down is never read, keeps its last reading flagged as standby, and is
+// read again as soon as it spins up.
+func TestDriveHealthCacheSkipsSpunDownDisks(t *testing.T) {
 	clock := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	runner := &fakeSmartctl{outputs: map[string]string{"sdb": readSmartctlFixture(t, "scsi.json")}}
+	runner := &fakeSmartctl{outputs: map[string]string{"sdd": readSmartctlFixture(t, "scsi.json")}}
 	cache := newTestCache(t, runner, &clock)
-	disk := diskRef{name: "sdb", smartType: "scsi", spinning: true, io: "100/200"}
-	expectCalls := func(step string, want int) {
-		t.Helper()
-		if calls := runner.takeCalls(); len(calls) != want {
-			t.Fatalf("%s: calls = %v, want %d", step, calls, want)
-		}
+	awake := diskRef{name: "sdd", smartType: "scsi"}
+	asleep := diskRef{name: "sdd", smartType: "scsi", asleep: true}
+
+	// Asleep before it was ever read: not read, reported as standby.
+	got := cache.lookup([]diskRef{asleep})
+	if calls := runner.takeCalls(); len(calls) != 0 {
+		t.Fatalf("spun-down disk was read: %v", calls)
+	}
+	if want := (&dto.DriveHealth{Standby: true}); !reflect.DeepEqual(got["sdd"], want) {
+		t.Errorf("asleep, never read = %+v, want %+v", got["sdd"], want)
 	}
 
-	// First observation (e.g. agent start): the disk may be asleep; not read.
-	if got := cache.lookup([]diskRef{disk}); len(got) != 0 {
-		t.Fatalf("first observation returned %v", got)
-	}
-	expectCalls("first observation", 0)
-
-	// No I/O since: still not read.
+	// Spins up: read at once.
 	clock = clock.Add(time.Minute)
-	cache.lookup([]diskRef{disk})
-	expectCalls("idle", 0)
-
-	// I/O since the last observation a minute ago: spinning, read.
-	clock = clock.Add(time.Minute)
-	disk.io = "101/200"
-	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil {
-		t.Fatal("recently active disk not read")
+	got = cache.lookup([]diskRef{awake})
+	if calls := runner.takeCalls(); len(calls) != 1 {
+		t.Fatalf("calls after spin-up = %v", calls)
 	}
-	expectCalls("recent I/O", 1)
-
-	// TTL passed, no I/O: last reading kept, not re-read.
-	clock = clock.Add(driveHealthTTL)
-	if got := cache.lookup([]diskRef{disk}); got["sdb"] == nil || !got["sdb"].CollectedAt.Before(clock) {
-		t.Errorf("idle disk reading = %+v", got["sdb"])
+	if h := got["sdd"]; h == nil || h.Standby {
+		t.Errorf("awake reading = %+v", h)
 	}
-	expectCalls("idle after TTL", 0)
 
-	// I/O happened, but the previous observation is older than the activity
-	// window: the disk may have spun down since. Not read.
-	clock = clock.Add(driveHealthActivityWindow + time.Minute)
-	disk.io = "150/260"
-	cache.lookup([]diskRef{disk})
-	expectCalls("stale activity", 0)
-
-	// Counters unreadable: never read.
+	// Spun down again within the TTL: last reading kept, flagged standby.
 	clock = clock.Add(time.Minute)
-	disk.io = ""
-	cache.lookup([]diskRef{disk})
-	expectCalls("no counters", 0)
+	got = cache.lookup([]diskRef{asleep})
+	if h := got["sdd"]; h == nil || !h.Standby || h.Protocol != "SCSI" {
+		t.Errorf("asleep after a read = %+v", h)
+	}
+	// Spins up again within the TTL: re-read straight away.
+	clock = clock.Add(time.Minute)
+	got = cache.lookup([]diskRef{awake})
+	if calls := runner.takeCalls(); len(calls) != 1 {
+		t.Fatalf("calls after second spin-up = %v", calls)
+	}
+	if h := got["sdd"]; h == nil || h.Standby || !h.CollectedAt.Equal(clock) {
+		t.Errorf("re-read after spin-up = %+v", h)
+	}
 }
