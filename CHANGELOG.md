@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#225](https://github.com/tinkerologie/unraid-management-agent/issues/225))
 
 ### Changed
+- Pull requests get path labels and at most one type label, `bug` or `enhancement`, from the shared tinkerologie PR labeler. Dependabot pull requests whose largest update is a patch or minor version merge automatically once the checks and commit statuses on their head commit have finished without a failure (a Codecov check that is still pending is not waited for; a Codecov failure blocks); majors, and pull requests with open review threads, stay for review.
 - Release workflows hardened (least-privilege job permissions, no expressions in shell scripts, no persisted checkout credentials, no dependency caches); scheduled workflows run on Australia/Brisbane time.
 - Releases push the updated PLG hash to `main` with a token from the Tinkerologie-Release GitHub App, the only actor allowed to bypass the pull-request rule on `main`, so the Unraid plugin manager and Community Applications see each new release.
 - Tinkerologie-Bot governance report updated to v1.4.3: an older run can no longer post a stale report after a newer run passed. Workflow formatting tidied.
@@ -127,6 +128,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose query fails is logged and left out. The NUT collector's command runner, `upsc`
   lookup and file checks are injectable for tests.
   ([#206](https://github.com/tinkerologie/unraid-management-agent/issues/206)).
+
+- **Exclusive share state** — `GET /shares` (and the share WebSocket/MQTT
+  payloads) now report Unraid 6.12+ exclusive share status per share:
+  `exclusive` (`/mnt/user/<share>` is a symlink that bypasses FUSE),
+  `exclusive_eligible` (exclusive shares are enabled and the share is
+  pool-only and, before Unraid 7.2, not NFS-exported), `exclusive_pool` (the share's pool) and,
+  when an eligible share has fallen back to FUSE, `locations` listing every
+  pool or array disk that holds a top-level folder for it, so the stray copy
+  can be found (`locations_unchecked` names disks and pools that were skipped
+  because they are spun down, their spin state is unknown or the check
+  failed, so they are never woken). `exclusive` comes from emhttp's
+  `shares.ini`, so nothing is read through FUSE; the fields are omitted on
+  older releases and while the array is stopped.
+
 - **Stable `device_id` for USB HID hwmon chips, and same-model fans kept apart** —
   `temperatures[]` and `fans[]` entries of `GET /api/v1/system` have a new `device_id`
   for chips on a USB HID device (fan/pump controllers such as Aquacomputer Octo/Quadro,
