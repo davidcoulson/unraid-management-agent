@@ -453,7 +453,7 @@ func TestDecodeModuleEEPROMErrors(t *testing.T) {
 	if m := DecodeModuleEEPROM(ModuleTypeSFF8472, make([]byte, 100)); !strings.Contains(m.Error, "too short") {
 		t.Errorf("short SFP: %+v", m)
 	}
-	if m := DecodeModuleEEPROM(0x9, []byte{0x18}); !strings.Contains(m.Error, "unsupported") || m.Identifier != "QSFP-DD" {
+	if m := DecodeModuleEEPROM(0x9, []byte{0x18}); m.Error != "" || m.Standard != "" || m.Identifier != "QSFP-DD" {
 		t.Errorf("CMIS: %+v", m)
 	}
 	// Alarms and warnings serialise as empty arrays, not null.

@@ -152,7 +152,7 @@ func DecodeModuleEEPROM(eepromType uint32, data []byte) *dto.NICModule {
 	case ModuleTypeSFF8636, ModuleTypeSFF8436:
 		decodeSFF8636(eepromType, data, m)
 	default:
-		m.Error = fmt.Sprintf("unsupported module EEPROM type %d", eepromType)
+		// Other layouts (CMIS QSFP-DD/OSFP, ...) report the identifier only.
 	}
 	return m
 }

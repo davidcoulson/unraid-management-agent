@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -9,6 +10,27 @@ import (
 )
 
 func TestToolGetNetworkCards(t *testing.T) {
+	t.Run("listed as a read-only tool", func(t *testing.T) {
+		server, _ := setupInitializedServer(t)
+		cs, cleanup := connectClientToServer(t, server)
+		defer cleanup()
+
+		result, err := cs.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("ListTools error: %v", err)
+		}
+		for _, tool := range result.Tools {
+			if tool.Name != "get_network_cards" {
+				continue
+			}
+			if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+				t.Errorf("get_network_cards annotations = %+v, want ReadOnlyHint", tool.Annotations)
+			}
+			return
+		}
+		t.Error("expected get_network_cards tool to be registered")
+	})
+
 	t.Run("pending before the first collection", func(t *testing.T) {
 		server, _ := setupInitializedServer(t)
 		cs, cleanup := connectClientToServer(t, server)

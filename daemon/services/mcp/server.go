@@ -1173,17 +1173,17 @@ func (s *Server) registerNewMonitoringTools() {
 	})
 
 	// Get network cards (cached hwmon temperatures and optic diagnostics)
-	addToolDirect(s, &mcp.Tool{
-		Name:        "get_network_cards",
-		Description: "Return the cached physical (PCI) network cards: per card the vendor, model, driver, firmware and hwmon temperatures (ASIC, PHY, MAC, module cages, with highest/critical limits); per port the interface, link state, speed, bond/bridge master and the plugged SFP/QSFP optic (identifier, connector, compliance, vendor name/part number, wavelength, module temperature and voltage, per-lane laser bias and TX/RX optical power in mW and dBm, active alarm/warning flags and thresholds). Serial numbers are never included. State is 'pending' until the nic collector has run.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ dto.MCPEmptyArgs) (*mcp.CallToolResult, any, error) {
-		logger.Info("MCP: Getting cached network cards")
-		if cached := s.cacheProvider.GetNICCache(); cached != nil {
-			return jsonResult(cached)
-		}
-		return jsonResult(dto.NewPendingNICList(time.Now()))
-	})
+	addReadTool[dto.MCPEmptyArgs](s,
+		"get_network_cards",
+		"Return the cached physical (PCI) network cards: per card the vendor, model, driver, firmware and hwmon temperatures (ASIC, PHY, MAC, module cages, with highest/critical limits); per port the interface, link state, speed, bond/bridge master and the plugged SFP/QSFP optic (identifier, connector, compliance, vendor name/part number, wavelength, module temperature and voltage, per-lane laser bias and TX/RX optical power in mW and dBm, active alarm/warning flags and thresholds). Serial numbers are never included. State is 'pending' until the nic collector has run.",
+		"Network card data not available",
+		func() (any, bool) {
+			logger.Info("MCP: Getting cached network cards")
+			if cached := s.cacheProvider.GetNICCache(); cached != nil {
+				return cached, true
+			}
+			return dto.NewPendingNICList(time.Now()), true
+		})
 
 	// Check plugin updates (returns cached result)
 	addToolDirect(s, &mcp.Tool{

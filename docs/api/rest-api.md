@@ -2340,8 +2340,9 @@ Get all methods to access the Unraid server, including LAN IP, mDNS hostname, Wi
 ### GET /network/cards
 
 Return the cached physical (PCI) network cards. Collected by the `nic` background
-collector (`INTERVAL_NIC`, default 60 s) from sysfs and the `SIOCETHTOOL` ioctl; no
-processes are spawned per cycle.
+collector (`INTERVAL_NIC`, default 60 s) from sysfs and the `SIOCETHTOOL` ioctl; reading
+the module EEPROMs through the ioctl spawns no process per module (`lspci -Dmm` and
+`ethtool -i` are still used for card identity and firmware).
 
 - **Cards:** every `/sys/class/net` interface whose `device` resolves to a PCI function,
   grouped per PCI slot (domain:bus:device without the function), so a dual-port card is one
@@ -2357,13 +2358,13 @@ processes are spawned per cycle.
 - **Optics:** each port's module EEPROM is read with `ETHTOOL_GMODULEINFO` and
   `ETHTOOL_GMODULEEEPROM` (the driver hooks `ethtool -m` uses) and decoded per SFF-8472
   (SFP/SFP+/SFP28, including external calibration) or SFF-8636/SFF-8436 (QSFP+/QSFP28).
-  Other module types (CMIS) report the identifier and an `error`. Ports whose driver has no
+  Other module types (CMIS) report the identifier only, with no `standard` and no `error`. Ports whose driver has no
   module support (BASE-T NICs) and empty cages have no `module`. `alarms`/`warnings` name
   the set flags (`temperature_high`, `voltage_low`, `lane<N>_rx_power_low`,
   `lane<N>_tx_bias_high`, `lane<N>_tx_power_high`, ...); SFF-8636 flags are latched (events
   since the previous read). Optical power is reported in mW and dBm, with dBm floored at -40
   for no light. While a module flags its monitors as not ready (powering up or resetting),
-  `data_not_ready` is `true` and readings and flags are omitted. Vendor serial numbers are
+  `data_not_ready` is `true`, and readings and flags are omitted. Vendor serial numbers are
   never decoded or reported.
 
 `state` is `pending` until the first collection and `ok` afterwards. `errors` lists
