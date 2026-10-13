@@ -3355,91 +3355,6 @@ func (s *Server) handlePluginUpdatesRefresh(w http.ResponseWriter, r *http.Reque
 	respondJSON(w, http.StatusOK, result)
 }
 
-// handlePluginUpdate godoc
-//
-//	@Summary		Update a specific plugin
-//	@Description	Update a specific plugin by name
-//	@Tags			Plugins
-//	@Produce		json
-//	@Param			name	path		string			true	"Plugin name"
-//	@Success		200		{object}	dto.Response	"Plugin updated"
-//	@Failure		400		{object}	dto.Response	"Invalid plugin name"
-//	@Failure		500		{object}	dto.Response	"Failed to update plugin"
-//	@Router			/plugins/{name}/update [post]
-func (s *Server) handlePluginUpdate(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	pluginName := vars["name"]
-
-	if err := lib.ValidatePluginName(pluginName); err != nil {
-		respondJSON(w, http.StatusBadRequest, dto.Response{
-			Success:   false,
-			Message:   err.Error(),
-			Timestamp: time.Now(),
-		})
-		return
-	}
-
-	controller := controllers.NewPluginController()
-	err := controller.UpdatePlugin(pluginName)
-	if err != nil {
-		logger.Error("API: Failed to update plugin %s: %v", pluginName, err)
-		respondJSON(w, http.StatusInternalServerError, dto.Response{
-			Success:   false,
-			Message:   "Failed to update plugin",
-			Timestamp: time.Now(),
-		})
-		return
-	}
-
-	respondJSON(w, http.StatusOK, dto.Response{
-		Success:   true,
-		Message:   fmt.Sprintf("Plugin %s updated successfully", pluginName),
-		Timestamp: time.Now(),
-	})
-}
-
-// handlePluginUpdateAll godoc
-//
-//	@Summary		Update all plugins
-//	@Description	Update all plugins that have updates available
-//	@Tags			Plugins
-//	@Produce		json
-//	@Success		200	{object}	dto.PluginBulkUpdateResult	"Plugin update results"
-//	@Failure		500	{object}	dto.Response				"Failed to update plugins"
-//	@Router			/plugins/update-all [post]
-func (s *Server) handlePluginUpdateAll(w http.ResponseWriter, _ *http.Request) {
-	logger.Info("API: Updating all plugins")
-
-	controller := controllers.NewPluginController()
-	results, err := controller.UpdateAllPlugins()
-	if err != nil {
-		logger.Error("API: Failed to update all plugins: %v", err)
-		respondJSON(w, http.StatusInternalServerError, dto.Response{
-			Success:   false,
-			Message:   "Failed to update plugins",
-			Timestamp: time.Now(),
-		})
-		return
-	}
-
-	succeeded := 0
-	failed := 0
-	for _, r := range results {
-		if r.Success {
-			succeeded++
-		} else {
-			failed++
-		}
-	}
-
-	respondJSON(w, http.StatusOK, dto.PluginBulkUpdateResult{
-		Results:   results,
-		Succeeded: succeeded,
-		Failed:    failed,
-		Timestamp: time.Now(),
-	})
-}
-
 // ===== VM Clone & Snapshot Handlers =====
 
 // handleVMClone godoc
@@ -5128,6 +5043,22 @@ func (s *Server) handleStorageTopology(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, dto.NewPendingStorageTopology(time.Now()))
+}
+
+// handleNetworkCards godoc
+//
+//	@Summary		Get network cards
+//	@Description	Returns the cached physical (PCI) network cards collected by the nic collector: one entry per PCI slot with vendor, model, driver, firmware and hwmon temperatures (ASIC, PHY, MAC, module cages), and per port the link state and the plugged optic's identity and digital diagnostics (SFF-8472/SFF-8636: module temperature and voltage, per-lane laser bias and TX/RX power, alarm/warning flags and thresholds). Vendor serial numbers are never reported. State is "pending" until the first collection.
+//	@Tags			Network
+//	@Produce		json
+//	@Success		200	{object}	dto.NICList	"Network cards"
+//	@Router			/network/cards [get]
+func (s *Server) handleNetworkCards(w http.ResponseWriter, _ *http.Request) {
+	if cached := s.GetNICCache(); cached != nil {
+		respondJSON(w, http.StatusOK, cached)
+		return
+	}
+	respondJSON(w, http.StatusOK, dto.NewPendingNICList(time.Now()))
 }
 
 // handleGetMCPToolPolicy godoc

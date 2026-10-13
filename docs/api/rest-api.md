@@ -47,9 +47,9 @@ Complete reference for all Unraid Management Agent API endpoints.
 
 ## Authentication
 
-Currently, the API does not require authentication. All endpoints are accessible without credentials.
+When `API_TOKEN` is set, every request (except `/api/v1/health` and `/swagger/`) must send `Authorization: Bearer <token>`. Without a token, `GET`, `HEAD` and `OPTIONS` requests work unauthenticated and every `POST`, `PUT`, `PATCH` and `DELETE` request returns `403 Forbidden`, unless `ALLOW_UNAUTHENTICATED_WRITES` is enabled. See [Configuration → Authentication](../guides/configuration.md#authentication).
 
-**Security Note**: Ensure the API is only accessible on trusted networks or implement network-level security (firewall, VPN, etc.).
+**Security Note**: Use HTTPS when sending a token over untrusted networks, and keep the API on trusted networks.
 
 ---
 
@@ -1437,10 +1437,51 @@ List all user shares.
     "used_bytes": 50000000000,
     "free_bytes": 50000000000,
     "usage_percent": 50.0,
+    "use_cache": "only",
+    "cache_pool": "cache",
+    "exclusive": true,
+    "exclusive_eligible": true,
+    "exclusive_pool": "cache",
+    "timestamp": "2025-10-03T13:41:13+10:00"
+  },
+  {
+    "name": "media",
+    "used_bytes": 2000000000000,
+    "free_bytes": 1000000000000,
+    "usage_percent": 66.7,
+    "use_cache": "only",
+    "cache_pool": "fast",
+    "exclusive": false,
+    "exclusive_eligible": true,
+    "exclusive_pool": "fast",
+    "locations": ["disk1", "fast"],
     "timestamp": "2025-10-03T13:41:13+10:00"
   }
 ]
 ```
+
+**Exclusive shares (Unraid 6.12+)**: with _Permit exclusive shares_ enabled,
+Unraid makes `/mnt/user/<share>` a symlink to `/mnt/<pool>/<share>` for shares
+that live on a single pool, so their I/O bypasses the FUSE user share layer.
+If a top-level folder for the share also exists on another pool or array disk,
+the share silently stays on FUSE.
+
+| Field                 | Description                                                                                                                                                                                                                                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exclusive`           | `true` when `/mnt/user/<share>` is a symlink (exclusive access)                                                                                                                                                                                                                                                      |
+| `exclusive_eligible`  | `true` when exclusive shares are enabled and the share is pool-only (an existing primary pool, no secondary storage; on servers without array slots any primary pool with no secondary pool; before Unraid 7.2 also not NFS-exported). Omitted when this cannot be determined (share config or disk list unreadable) |
+| `exclusive_pool`      | The share's pool: the symlink target when exclusive, otherwise the pool a pool-only share would be exclusive on                                                                                                                                                                                                      |
+| `locations`           | Pools and array disks holding a top-level folder for the share; only when eligible but not exclusive (`[]` when none was found). Entries other than `exclusive_pool` keep the share on FUSE                                                                                                                          |
+| `locations_unchecked` | Disks and pools not checked because a device is spun down, its spin state is unknown or the check failed, so the check never wakes a disk                                                                                                                                                                            |
+
+`exclusive` is the flag emhttp records in `shares.ini` when it sets up the
+symlink, so nothing under `/mnt/user` (FUSE) is accessed. The fields are
+omitted on releases without the setting, while the array is stopped and when
+user shares are disabled. `locations` comes from one `lstat` of
+`/mnt/<disk or pool>/<share>` per branch; both lists are omitted if the
+disk list (`disks.ini`) cannot be read. Only disks and pools that take part in user shares are checked: array disks
+allowed by the global included/excluded disk settings and pools whose user
+share participation is not disabled.
 
 ---
 
@@ -2220,7 +2261,13 @@ Get Network UPS Tools (NUT) status for every NUT device.
     { "name": "ups", "description": "UPS device: ups", "available": true },
     { "name": "ats", "description": "UPS device: ats", "available": true }
   ],
-  "status": { "device_name": "ups", "type": "ups", "status": "OL", "battery_charge_percent": 100, "load_percent": null },
+  "status": {
+    "device_name": "ups",
+    "type": "ups",
+    "status": "OL",
+    "battery_charge_percent": 100,
+    "load_percent": null
+  },
   "statuses": [
     { "device_name": "ups", "type": "ups", "status": "OL", "battery_charge_percent": 100, "load_percent": null },
     { "device_name": "ats", "type": "ats", "status": "OL", "battery_charge_percent": null, "output_frequency": 60 }
@@ -2334,6 +2381,114 @@ Get all methods to access the Unraid server, including LAN IP, mDNS hostname, Wi
 | `wan`       | Public WAN IP (if accessible)                              |
 | `ipv6`      | IPv6 global unicast addresses                              |
 | `other`     | Other access methods                                       |
+
+---
+
+### GET /network/cards
+
+Return the cached physical (PCI) network cards. Collected by the `nic` background
+collector (`INTERVAL_NIC`, default 60 s) from sysfs and the `SIOCETHTOOL` ioctl; reading
+the module EEPROMs through the ioctl spawns no process per module (`lspci -Dmm` and
+`ethtool -i` are still used for card identity and firmware).
+
+- **Cards:** every `/sys/class/net` interface whose `device` resolves to a PCI function,
+  grouped per PCI slot (domain:bus:device without the function), so a dual-port card is one
+  entry. Virtual interfaces (bridges, bonds, VLANs, veth, tunnels), USB NICs, SR-IOV virtual
+  functions and switchdev representors are skipped. Vendor, device and subsystem names come
+  from `lspci -Dmm` (once per card); `model` is a short product name derived from the device
+  name. `firmware_version` is what `ethtool -i` shows.
+- **Temperatures:** the hwmon chips of the card's PCI functions (or of devices below them,
+  such as PHYs): `sensor` is `asic`, `phy`, `mac`, `module` (transceiver cage) or `other`.
+  The ASIC sensor every function of a multi-function card exposes is the one shared die and
+  is reported once, with the highest reading; every other sensor is kept per PCI function
+  and names its port in `interface`.
+- **Optics:** each port's module EEPROM is read with `ETHTOOL_GMODULEINFO` and
+  `ETHTOOL_GMODULEEEPROM` (the driver hooks `ethtool -m` uses) and decoded per SFF-8472
+  (SFP/SFP+/SFP28, including external calibration) or SFF-8636/SFF-8436 (QSFP+/QSFP28).
+  Other module types (CMIS) report the identifier only, with no `standard` and no `error`. Ports whose driver has no
+  module support (BASE-T NICs) and empty cages have no `module`. `alarms`/`warnings` name
+  the set flags (`temperature_high`, `voltage_low`, `lane<N>_rx_power_low`,
+  `lane<N>_tx_bias_high`, `lane<N>_tx_power_high`, ...); SFF-8636 flags are latched (events
+  since the previous read). Optical power is reported in mW and dBm, with dBm floored at -40
+  for no light. While a module flags its monitors as not ready (powering up or resetting),
+  `data_not_ready` is `true`, and readings and flags are omitted. Vendor serial numbers are
+  never decoded or reported.
+
+`state` is `pending` until the first collection and `ok` afterwards. `errors` lists
+unexpected module read failures.
+
+**Response** (ConnectX-6 Dx with two 100G AOCs and an Aquantia AQC113CS; trimmed):
+
+```json
+{
+  "state": "ok",
+  "cards": [
+    {
+      "id": "0000:41:00",
+      "vendor": "Mellanox Technologies",
+      "model": "ConnectX-6 Dx",
+      "device_name": "MT2892 Family [ConnectX-6 Dx]",
+      "subsystem_name": "Device 0016",
+      "vendor_id": "15b3", "device_id": "101d", "subsystem_vendor_id": "15b3", "subsystem_device_id": "0016",
+      "driver": "mlx5_core",
+      "firmware_version": "22.47.3576 (MT_0000000359)",
+      "temperatures": [
+        { "sensor": "asic", "label": "asic", "pci_address": "0000:41:00.0", "celsius": 89, "highest_celsius": 90, "crit_celsius": 105 },
+        { "sensor": "module", "label": "Module0", "interface": "eth0", "pci_address": "0000:41:00.0", "celsius": 51, "highest_celsius": 55.875, "crit_celsius": 80 }
+      ],
+      "ports": [
+        {
+          "id": "0000:41:00.0", "interface": "eth0", "pci_address": "0000:41:00.0", "dev_port": 0,
+          "operstate": "up", "carrier": true, "speed_mbps": 100000, "duplex": "full", "mtu": 1500, "master": "bond0",
+          "module": {
+            "identifier": "QSFP28", "standard": "SFF-8636", "connector": "No separable connector",
+            "compliance": "100G AOC or 25GAUI C2M AOC (BER 5e-5)",
+            "vendor_name": "CISCO-PROLINE", "vendor_pn": "QSFP-100G-AOC-3M", "vendor_rev": "D1",
+            "wavelength_nm": 850, "ddm_supported": true,
+            "temperature_celsius": 51.01, "voltage_volts": 3.2688, "rx_power_type": "average",
+            "lanes": [
+              { "lane": 1, "tx_bias_ma": 6.216, "tx_power_mw": 1.2432, "tx_power_dbm": 0.95, "rx_power_mw": 2.3192, "rx_power_dbm": 3.65 },
+              ...
+            ],
+            "alarms": [], "warnings": [],
+            "thresholds": {
+              "temperature_celsius": { "high_alarm": 90, "high_warning": 80, "low_warning": -10, "low_alarm": -20 },
+              "voltage_volts": { "high_alarm": 3.62, "high_warning": 3.6, "low_warning": 3, "low_alarm": 2.95 },
+              "tx_bias_ma": { "high_alarm": 14, "high_warning": 12, "low_warning": 1.5, "low_alarm": 1 },
+              "tx_power_dbm": { "high_alarm": 8.13, "high_warning": 7.99, "low_warning": -6.99, "low_alarm": -10 },
+              "rx_power_dbm": { "high_alarm": 8.13, "high_warning": 7.99, "low_warning": -10, "low_alarm": -13.01 }
+            }
+          }
+        },
+        ...
+      ]
+    },
+    {
+      "id": "0000:d5:00",
+      "vendor": "Aquantia Corp.",
+      "model": "AQC113CS",
+      "device_name": "AQtion AQC113CS NBase-T/IEEE 802.3an Ethernet Controller [Antigua 10G]",
+      "driver": "atlantic",
+      "firmware_version": "1.3.24",
+      "temperatures": [
+        { "sensor": "phy", "label": "PHY Temperature", "interface": "eth2", "pci_address": "0000:d5:00.0", "celsius": 42 },
+        { "sensor": "mac", "label": "MAC Temperature", "interface": "eth2", "pci_address": "0000:d5:00.0", "celsius": 42 }
+      ],
+      "ports": [
+        { "id": "0000:d5:00.0", "interface": "eth2", "pci_address": "0000:d5:00.0", "dev_port": 0, "operstate": "down", "carrier": false, "mtu": 1500 }
+      ]
+    }
+  ],
+  "collection_duration_ms": 217,
+  "timestamp": "2026-10-11T13:48:02-04:00"
+}
+```
+
+**Example**:
+
+```bash
+curl http://192.168.20.21:8043/api/v1/network/cards
+```
 
 **Use Cases**:
 

@@ -72,6 +72,7 @@ type CacheProvider interface {
 	GetOSUpdateCache() *dto.OSUpdateStatus
 	GetMoverCache() *dto.MoverStatus
 	GetStorageTopologyCache() *dto.StorageTopology
+	GetNICCache() *dto.NICList
 	// Logs
 	ListLogFiles() []dto.LogFile
 	GetLogContent(path, lines, start string) (*dto.LogFileContent, error)
@@ -115,6 +116,9 @@ type Server struct {
 	agentSvc                *agent.Service
 	toolPolicyStore         *ToolPolicyStore
 	toolsListLoggedSessions sync.Map
+	// networkWriteLock makes every write tool read-only for network (HTTP)
+	// clients while no API token is configured (#245). STDIO never sets it.
+	networkWriteLock bool
 }
 
 // NewServer creates a new MCP server instance.
@@ -142,12 +146,37 @@ func (s *Server) GetToolPolicyStore() *ToolPolicyStore {
 	return s.toolPolicyStore
 }
 
+// SetNetworkWriteLock locks all write tools for network clients. The HTTP boot
+// path calls it with ctx.WritesLocked(); the STDIO path does not.
+func (s *Server) SetNetworkWriteLock(locked bool) {
+	s.networkWriteLock = locked
+}
+
+// globalReadOnly reports whether every write tool is blocked, either by
+// read-only mode or by the network write lock.
+func (s *Server) globalReadOnly() bool {
+	return s.ctx.ReadOnly || s.networkWriteLock
+}
+
+// blockedMessage explains why a write tool with an effective read-only policy
+// was blocked, naming the cause so the user knows what to change.
+func (s *Server) blockedMessage(toolName string) string {
+	switch {
+	case s.networkWriteLock && !s.ctx.ReadOnly:
+		return writesLockedBlockedMessage
+	case s.ctx.ReadOnly:
+		return readOnlyBlockedMessage
+	default:
+		return fmt.Sprintf("Blocked by tool access policy: '%s' is set to read-only", toolName)
+	}
+}
+
 // effectivePolicy returns the calculated policy for a tool, taking global ReadOnly mode into account.
 func (s *Server) effectivePolicy(toolName string) domain.ToolPolicyValue {
 	if s.toolPolicyStore != nil {
-		return s.toolPolicyStore.GetEffectivePolicy(toolName, s.ctx.ReadOnly)
+		return s.toolPolicyStore.GetEffectivePolicy(toolName, s.globalReadOnly())
 	}
-	if s.ctx.ReadOnly {
+	if s.globalReadOnly() {
 		return domain.PolicyReadOnly
 	}
 	return domain.PolicyDefault
@@ -173,7 +202,7 @@ func (s *Server) Initialize() error {
 			if method == "tools/call" {
 				if callReq, ok := req.(*mcp.CallToolRequest); ok && callReq.Params != nil {
 					toolName := callReq.Params.Name
-					if s.toolPolicyStore != nil && s.toolPolicyStore.GetEffectivePolicy(toolName, s.ctx.ReadOnly) == domain.PolicyHidden {
+					if s.toolPolicyStore != nil && s.toolPolicyStore.GetEffectivePolicy(toolName, s.globalReadOnly()) == domain.PolicyHidden {
 						return nil, fmt.Errorf("unknown tool %q", toolName)
 					}
 				}
@@ -239,7 +268,7 @@ func (s *Server) Initialize() error {
 					if s.toolPolicyStore != nil {
 						filtered := make([]*mcp.Tool, 0, len(lr.Tools))
 						for _, t := range lr.Tools {
-							if s.toolPolicyStore.GetEffectivePolicy(t.Name, s.ctx.ReadOnly) != domain.PolicyHidden {
+							if s.toolPolicyStore.GetEffectivePolicy(t.Name, s.globalReadOnly()) != domain.PolicyHidden {
 								filtered = append(filtered, t)
 							}
 						}
@@ -1171,6 +1200,19 @@ func (s *Server) registerNewMonitoringTools() {
 		return jsonResult(dto.NewPendingStorageTopology(time.Now()))
 	})
 
+	// Get network cards (cached hwmon temperatures and optic diagnostics)
+	addReadTool[dto.MCPEmptyArgs](s,
+		"get_network_cards",
+		"Return the cached physical (PCI) network cards: per card the vendor, model, driver, firmware and hwmon temperatures (ASIC, PHY, MAC, module cages, with highest/critical limits); per port the interface, link state, speed, bond/bridge master and the plugged SFP/QSFP optic (identifier, connector, compliance, vendor name/part number, wavelength, module temperature and voltage, per-lane laser bias and TX/RX optical power in mW and dBm, active alarm/warning flags and thresholds). Serial numbers are never included. State is 'pending' until the nic collector has run.",
+		"Network card data not available",
+		func() (any, bool) {
+			logger.Info("MCP: Getting cached network cards")
+			if cached := s.cacheProvider.GetNICCache(); cached != nil {
+				return cached, true
+			}
+			return dto.NewPendingNICList(time.Now()), true
+		})
+
 	// Check plugin updates (returns cached result)
 	addToolDirect(s, &mcp.Tool{
 		Name:        "check_plugin_updates",
@@ -1894,53 +1936,6 @@ func (s *Server) registerNewControlTools() {
 		return jsonResult(result)
 	})
 
-	// Update single plugin
-	addWriteTool(s, &mcp.Tool{
-		Name:        "update_plugin",
-		Description: "Update a specific Unraid plugin to the latest version.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: new(true),
-			IdempotentHint:  true,
-		},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, args dto.MCPPluginUpdateArgs) (*mcp.CallToolResult, any, error) {
-		if !args.Confirm {
-			return textResult("Plugin update requires confirm=true."), nil, nil
-		}
-		if args.PluginName == "" {
-			return textResult("plugin_name is required for single plugin updates"), nil, nil
-		}
-		if err := lib.ValidatePluginName(args.PluginName); err != nil {
-			return textResult(fmt.Sprintf("Invalid plugin name: %v", err)), nil, nil
-		}
-		logger.Info("MCP: Updating plugin '%s'", args.PluginName)
-		pluginCtrl := controllers.NewPluginController()
-		err := pluginCtrl.UpdatePlugin(args.PluginName)
-		if err != nil {
-			return textResult(fmt.Sprintf("Failed to update plugin: %v", err)), nil, nil
-		}
-		return textResult(fmt.Sprintf("Plugin '%s' updated successfully", args.PluginName)), nil, nil
-	})
-
-	// Update all plugins
-	addWriteTool(s, &mcp.Tool{
-		Name:        "update_all_plugins",
-		Description: "Update all installed Unraid plugins that have available updates.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: new(true),
-		},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, args dto.MCPPluginUpdateArgs) (*mcp.CallToolResult, any, error) {
-		if !args.Confirm {
-			return textResult("Bulk plugin update requires confirm=true."), nil, nil
-		}
-		logger.Info("MCP: Updating all plugins")
-		pluginCtrl := controllers.NewPluginController()
-		results, err := pluginCtrl.UpdateAllPlugins()
-		if err != nil {
-			return textResult(fmt.Sprintf("Failed to update plugins: %v", err)), nil, nil
-		}
-		return jsonResult(results)
-	})
-
 	// Create VM snapshot
 	addWriteTool(s, &mcp.Tool{
 		Name:        "create_vm_snapshot",
@@ -2113,16 +2108,12 @@ func (s *Server) registerRemediationTools() {
 		}
 
 		// Read-only mode: return the report but never execute actions.
-		if s.ctx.ReadOnly || effectivePolicy == domain.PolicyReadOnly {
+		if s.globalReadOnly() || effectivePolicy == domain.PolicyReadOnly {
 			logger.Warning("MCP: blocked system_health_report action execution: read-only mode")
-			note := readOnlyBlockedMessage
-			if effectivePolicy == domain.PolicyReadOnly && !s.ctx.ReadOnly {
-				note = "Blocked by tool access policy: 'system_health_report' is set to read-only"
-			}
 			return jsonResult(map[string]any{
 				"report":   report,
 				"executed": false,
-				"note":     note,
+				"note":     s.blockedMessage("system_health_report"),
 			})
 		}
 
@@ -2194,7 +2185,7 @@ func (s *Server) registerRemediationTools() {
 
 		// Read-only mode: always behave as a dry-run, even with confirm=true.
 		confirm := args.Confirm
-		if effectivePolicy == domain.PolicyReadOnly || s.ctx.ReadOnly {
+		if effectivePolicy == domain.PolicyReadOnly || s.globalReadOnly() {
 			if confirm {
 				logger.Warning("MCP: blocked run_runbook execution: read-only mode")
 			}
@@ -2217,11 +2208,7 @@ func (s *Server) registerRemediationTools() {
 				"steps":    steps,
 			}
 			if args.Confirm {
-				note := readOnlyBlockedMessage
-				if effectivePolicy == domain.PolicyReadOnly && !s.ctx.ReadOnly {
-					note = "Blocked by tool access policy: 'run_runbook' is set to read-only"
-				}
-				resp["note"] = note
+				resp["note"] = s.blockedMessage("run_runbook")
 			}
 			return jsonResult(resp)
 		}
@@ -3139,6 +3126,11 @@ Please describe your issue and I'll gather the relevant system information to he
 // agent runs in read-only mode.
 const readOnlyBlockedMessage = "This operation is blocked: the agent is running in read-only mode"
 
+// writesLockedBlockedMessage is returned for every write tool call from a
+// network client while no API token is configured (#245).
+const writesLockedBlockedMessage = "This operation is blocked: write access is disabled because no API token is configured. " +
+	"Set API_TOKEN in the plugin settings (or the API_TOKEN environment variable) and connect with 'Authorization: Bearer <token>'"
+
 // setConfirmField attempts to set a "Confirm" boolean field to val on args if present.
 func setConfirmField(args any, val bool) {
 	if args == nil {
@@ -3203,12 +3195,9 @@ func addWriteTool[In any](s *Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[
 
 		switch effectivePolicy {
 		case domain.PolicyReadOnly:
-			if s.ctx.ReadOnly {
-				logger.Warning("MCP: blocked write tool '%s': agent is in read-only mode", tool.Name)
-				return textResult(readOnlyBlockedMessage), nil, nil
-			}
-			logger.Warning("MCP: blocked write tool '%s': set to read-only by tool access policy", tool.Name)
-			return textResult(fmt.Sprintf("Blocked by tool access policy: '%s' is set to read-only", tool.Name)), nil, nil
+			msg := s.blockedMessage(tool.Name)
+			logger.Warning("MCP: blocked write tool '%s': %s", tool.Name, msg)
+			return textResult(msg), nil, nil
 
 		case domain.PolicyAsk:
 			var raw json.RawMessage

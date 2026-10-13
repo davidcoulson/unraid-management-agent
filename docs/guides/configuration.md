@@ -16,22 +16,24 @@ This file is created automatically after the first installation and persists acr
 
 ### Core Settings
 
-| Option                     | Default  | Description                                                                                        |
-| -------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `--port`                   | `8043`   | HTTP API port                                                                                      |
-| `--bind-address`           | -        | IP to bind the HTTP server to (empty = all). mDNS advertises it. Loopback rejected; invalid → all. |
-| `--read-only`              | `false`  | Block state-changing MCP tools (AI agents read-only; REST API unaffected)                          |
-| `--tool-policy`            | -        | Comma-separated per-tool MCP policies (`tool=policy`), e.g. `system_reboot=ask,container_action=read_only`. If `tool_policy.json` exists on disk, it takes precedence. |
-| `--api-token`              | -        | Require `Authorization: Bearer <token>` on the HTTP API and `/mcp` (empty = no authentication)     |
-| `--mcp-connect-secret`     | -        | Optional 32–256 char (`[A-Za-z0-9_-]`) secret enabling header-free MCP onboarding at `/mcp/<secret>` (`MCP_CONNECT_SECRET`) |
-| `--debug`                  | `false`  | Enable debug logging                                                                               |
-| `--mqtt-enabled`           | `false`  | Enable MQTT publishing                                                                             |
-| `--mqtt-broker`            | -        | MQTT broker address (e.g., `tcp://localhost:1883`)                                                 |
-| `--mqtt-topic-prefix`      | `unraid` | MQTT topic prefix                                                                                  |
-| `--mqtt-username`          | -        | MQTT username (optional)                                                                           |
-| `--mqtt-password`          | -        | MQTT password (optional)                                                                           |
-| `--discovery-enabled`      | `true`   | Advertise the agent via mDNS for auto-discovery                                                    |
-| `--discovery-service-name` | -        | Override the advertised mDNS instance name                                                         |
+| Option                           | Default  | Description                                                                                                                                                            |
+| -------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--port`                         | `8043`   | HTTP API port                                                                                                                                                          |
+| `--bind-address`                 | -        | IP to bind the HTTP server to (empty = all). mDNS advertises it. Loopback rejected; invalid → all.                                                                     |
+| `--read-only`                    | `false`  | Block state-changing MCP tools (AI agents read-only; REST API unaffected)                                                                                              |
+| `--tool-policy`                  | -        | Comma-separated per-tool MCP policies (`tool=policy`), e.g. `system_reboot=ask,container_action=read_only`. If `tool_policy.json` exists on disk, it takes precedence. |
+| `--api-token`                    | -        | Require `Authorization: Bearer <token>` on the HTTP API and `/mcp` (empty = unauthenticated reads, network writes refused)                                             |
+| `--allow-unauthenticated-writes` | `false`  | Allow network writes without an API token (not recommended; `ALLOW_UNAUTHENTICATED_WRITES`)                                                                            |
+| `--wan-ip-lookup`                | `true`   | Ask api.ipify.org, ifconfig.me and icanhazip.com for the WAN IP on request (`WAN_IP_LOOKUP`; `false` uses only Unraid's `WANIP`)                                       |
+| `--mcp-connect-secret`           | -        | Optional 32–256 char (`[A-Za-z0-9_-]`) secret enabling header-free MCP onboarding at `/mcp/<secret>` (`MCP_CONNECT_SECRET`)                                            |
+| `--debug`                        | `false`  | Enable debug logging                                                                                                                                                   |
+| `--mqtt-enabled`                 | `false`  | Enable MQTT publishing                                                                                                                                                 |
+| `--mqtt-broker`                  | -        | MQTT broker address (e.g., `tcp://localhost:1883`)                                                                                                                     |
+| `--mqtt-topic-prefix`            | `unraid` | MQTT topic prefix                                                                                                                                                      |
+| `--mqtt-username`                | -        | MQTT username (optional)                                                                                                                                               |
+| `--mqtt-password`                | -        | MQTT password (optional)                                                                                                                                               |
+| `--discovery-enabled`            | `true`   | Advertise the agent via mDNS for auto-discovery                                                                                                                        |
+| `--discovery-service-name`       | -        | Override the advertised mDNS instance name                                                                                                                             |
 
 ### Collection Intervals
 
@@ -388,6 +390,24 @@ grep DEBUG /var/log/unraid-management-agent.log
 
 ### Network Security
 
+#### WAN IP lookup
+
+When network access URLs are requested (`GET /api/v1/network/access-urls` or the MCP tool
+`get_network_access_urls`), the agent asks `api.ipify.org`, `ifconfig.me` and `icanhazip.com`, in that order,
+for the server's public (WAN) IP and stops at the first answer. Those services see the server's public IP
+address. Nothing is looked up at startup or on a schedule, and the result is not cached. If all three fail,
+the `WANIP=` value from Unraid's `/boot/config/network.cfg` is used.
+
+To make no external requests, turn the lookup off. The WAN entry then uses only the `WANIP=` value, or is
+left out if none is set.
+
+| Method                     | Setting                                         |
+| -------------------------- | ----------------------------------------------- |
+| Plugin settings page       | **WAN IP Lookup** (off)                         |
+| Config file (`config.cfg`) | `WAN_IP_LOOKUP="false"`                         |
+| YAML config (`config.yml`) | `wan_ip_lookup: false`                          |
+| CLI flag / env var         | `--wan-ip-lookup=false` / `WAN_IP_LOOKUP=false` |
+
 **Recommendations**:
 
 - Keep port 8043 on internal network only
@@ -436,19 +456,48 @@ Claude Desktop.
 ### Authentication
 
 Set an API token to require `Authorization: Bearer <token>`. When the token is
-empty (the default) the API stays unauthenticated, so upgrading an existing
-install changes nothing until you opt in.
+empty (the default) network clients can read data without authentication, but
+every state-changing request is refused:
+
+- REST `POST`, `PUT`, `PATCH` and `DELETE` requests return `403 Forbidden` with
+  `{"error": "Write access is disabled because no API token is configured. Set API_TOKEN in the plugin settings (or the API_TOKEN environment variable) and send it as 'Authorization: Bearer <token>'."}`
+- HTTP MCP (`/mcp` and `/mcp/<connect-secret>`) treats every write tool as
+  read-only. STDIO MCP (`mcp-stdio`) runs locally and is not affected.
+
+`GET`, `HEAD` and `OPTIONS` requests, WebSocket subscriptions and MCP read tools
+keep working, so monitoring clients need no token.
+
+#### Allow write access without a token (not recommended)
+
+`ALLOW_UNAUTHENTICATED_WRITES` restores the behaviour of earlier releases: with
+no token, anyone who can reach the agent can control the server. It has no
+effect once a token is set.
+
+| Setting                      | CLI flag                         | Env var                        | Config key                                                                            |
+| ---------------------------- | -------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
+| Allow writes without a token | `--allow-unauthenticated-writes` | `ALLOW_UNAUTHENTICATED_WRITES` | `allow_unauthenticated_writes` (YAML) / `ALLOW_UNAUTHENTICATED_WRITES` (`config.cfg`) |
+
+Plugin installs that were upgraded from an earlier release without a token get
+`ALLOW_UNAUTHENTICATED_WRITES="true"` once, so their existing clients keep
+working, and the settings page shows a warning. Set a token, add it to your
+clients, then turn the option off. Fresh installs start with it off. Daemons
+started directly (CLI, environment or YAML) are not migrated: set `API_TOKEN`,
+or the opt-out, to keep write access.
 
 #### Plugin Settings Page (Recommended)
 
 The easiest way to configure authentication is through the Unraid WebGUI:
+
 1. Go to **Settings** $\rightarrow$ **Unraid Management Agent**.
 2. Scroll to the **Authentication** section.
 3. Click **Generate** to create a secure 64-character token via the browser's cryptographic API.
 4. Click **Copy** to copy the token to your clipboard.
 5. Click **Apply** at the bottom of the page. The plugin saves the token and restarts the service automatically.
 
-To disable authentication, click **Clear** and then **Apply**.
+Clicking **Clear** and then **Apply** removes the token. Network access then
+becomes read-only again, unless **Allow Write Access Without a Token**
+(`ALLOW_UNAUTHENTICATED_WRITES`) is on, in which case anyone on the network can
+use control actions (see above).
 
 #### Manual Configuration (SSH / config.cfg)
 

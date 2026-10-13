@@ -1,13 +1,7 @@
 {
-  "json_format_version": [
-    1,
-    0
-  ],
+  "json_format_version": [1, 0],
   "smartctl": {
-    "version": [
-      7,
-      5
-    ],
+    "version": [7, 5],
     "drive_database_version": {
       "string": "7.5/6293"
     },
@@ -94,10 +88,7 @@
       }
     },
     "capabilities": {
-      "values": [
-        123,
-        3
-      ],
+      "values": [123, 3],
       "exec_offline_immediate_supported": true,
       "offline_is_aborted_upon_new_cmd": false,
       "offline_surface_scan_supported": true,

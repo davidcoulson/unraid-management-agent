@@ -54,6 +54,7 @@ type SystemControllerInterface interface {
 // It maintains an in-memory cache of data from collectors and broadcasts updates to WebSocket clients.
 type Server struct {
 	ctx              *domain.Context
+	networkAccess    *collectors.NetworkAccessDiscovery
 	httpServer       *http.Server
 	router           *mux.Router
 	wsHub            *WSHub
@@ -102,6 +103,7 @@ func NewServerWithCollectorManager(ctx *domain.Context, cm CollectorManagerInter
 		ready:            make(chan struct{}),
 		collectorManager: cm,
 		CacheStore:       &CacheStore{registry: ctx.Platform},
+		networkAccess:    collectors.NewNetworkAccessDiscovery(ctx.WANIPLookup),
 	}
 
 	s.setupRoutes()
@@ -119,6 +121,7 @@ func (s *Server) setupRoutes() {
 	// throttled before any credential comparison is performed.
 	s.router.Use(rateLimitMiddleware(newPerClientRateLimiter(rate.Limit(rateLimitPerSecond), rateLimitBurst)))
 	s.router.Use(authMiddlewareWithMCPSecret(s.ctx.APIToken, s.ctx.MCPConnectSecret))
+	s.router.Use(writeLockMiddleware(s.ctx.WritesLocked()))
 	s.router.Use(loggingMiddleware)
 
 	s.router.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +180,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/system/flash", s.handleFlashHealth).Methods("GET") // Issue #51
 	api.HandleFunc("/network", s.handleNetwork).Methods("GET")
 	api.HandleFunc("/network/access-urls", s.handleNetworkAccessURLs).Methods("GET")
+	api.HandleFunc("/network/cards", s.handleNetworkCards).Methods("GET")
 
 	// ZFS endpoints
 	api.HandleFunc("/zfs/pools", s.handleZFSPools).Methods("GET")
@@ -246,8 +250,6 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/plugins", s.handlePluginList).Methods("GET")
 	api.HandleFunc("/plugins/check-updates", s.handlePluginCheckUpdates).Methods("GET")
 	api.HandleFunc("/plugins/updates/refresh", s.handlePluginUpdatesRefresh).Methods("POST")
-	api.HandleFunc("/plugins/update-all", s.handlePluginUpdateAll).Methods("POST")
-	api.HandleFunc("/plugins/{name}/update", s.handlePluginUpdate).Methods("POST")
 
 	// Update status endpoint (Issue #50)
 	api.HandleFunc("/updates", s.handleUpdateStatus).Methods("GET")
@@ -674,7 +676,7 @@ func (s *Server) GetShareConfig(name string) *dto.ShareConfig {
 // agent serves HTTPS the URLs are rewritten to https:// with the configured
 // port, so clients are pointed at the scheme the server actually listens on.
 func (s *Server) GetNetworkAccessURLs() *dto.NetworkAccessURLs {
-	accessURLs := collectors.CollectNetworkAccessURLs()
+	accessURLs := s.networkAccess.Collect()
 	if s.ctx.TLSEnabled() {
 		accessURLs.URLs = collectors.GetHTTPSURLs(accessURLs.URLs, s.ctx.Port)
 	}

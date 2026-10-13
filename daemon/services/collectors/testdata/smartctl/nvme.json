@@ -1,13 +1,7 @@
 {
-  "json_format_version": [
-    1,
-    0
-  ],
+  "json_format_version": [1, 0],
   "smartctl": {
-    "version": [
-      7,
-      5
-    ],
+    "version": [7, 5],
     "exit_status": 0
   },
   "device": {
@@ -103,14 +97,7 @@
     "num_err_log_entries": 0,
     "warning_temp_time": 0,
     "critical_comp_time": 0,
-    "temperature_sensors": [
-      null,
-      35,
-      44,
-      35,
-      35,
-      33
-    ]
+    "temperature_sensors": [null, 35, 44, 35, 35, 33]
   },
   "spare_available": {
     "current_percent": 100,

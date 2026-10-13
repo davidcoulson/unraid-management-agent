@@ -1,13 +1,7 @@
 {
-  "json_format_version": [
-    1,
-    0
-  ],
+  "json_format_version": [1, 0],
   "smartctl": {
-    "version": [
-      7,
-      5
-    ],
+    "version": [7, 5],
     "exit_status": 0
   },
   "device": {
