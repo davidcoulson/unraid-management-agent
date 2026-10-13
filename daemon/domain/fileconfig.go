@@ -37,6 +37,13 @@ type FileConfig struct {
 	// APIToken enables bearer-token authentication when non-empty.
 	APIToken *string `yaml:"api_token,omitempty"`
 
+	// AllowUnauthenticatedWrites restores network write access without an API
+	// token (not recommended).
+	AllowUnauthenticatedWrites *bool `yaml:"allow_unauthenticated_writes,omitempty"`
+
+	// WANIPLookup enables the external WAN IP lookup (default true).
+	WANIPLookup *bool `yaml:"wan_ip_lookup,omitempty"`
+
 	// MCPConnectSecret enables the secret-bearing MCP connect URL (/mcp/<secret>) when non-empty.
 	MCPConnectSecret *string `yaml:"mcp_connect_secret,omitempty"`
 
@@ -104,6 +111,8 @@ type FileConfigIntervals struct {
 
 	// StorageTopology is the storage_topology collector interval in seconds.
 	StorageTopology *int `yaml:"storage_topology,omitempty"`
+	// NIC is the nic collector interval in seconds.
+	NIC *int `yaml:"nic,omitempty"`
 }
 
 // LoadConfigFile reads and parses a YAML config file.

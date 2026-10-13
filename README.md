@@ -73,7 +73,7 @@ For information about the official Unraid GraphQL API, please refer to:
 
 - **Integrations**
 
-  - [MCP (AI Agents)](docs/integrations/mcp.md) - Model Context Protocol (54 tools)
+  - [MCP (AI Agents)](docs/integrations/mcp.md) - Model Context Protocol (126 tools)
   - [MQTT](docs/integrations/mqtt.md) - MQTT publishing for IoT
   - [Grafana Dashboards](docs/integrations/grafana.md) - Monitoring dashboards
   - [Home Assistant](docs/integrations/home-assistant.md) - Smart home integration
@@ -123,7 +123,27 @@ For information about the official Unraid GraphQL API, please refer to:
 - **WebSocket**: Real-time event streaming for live updates
 - **Prometheus**: Native `/metrics` endpoint for Grafana/monitoring integration (41 metrics)
 - **MQTT**: Event publishing to MQTT brokers for IoT integration and Home Assistant
-- **MCP (Model Context Protocol)**: AI agent integration for LLM-powered monitoring and control (54 tools)
+- **MCP (Model Context Protocol)**: AI agent integration for LLM-powered monitoring and control (126 tools)
+
+## Security and Privacy
+
+- **Authentication default**: the API listens on all network interfaces on port 8043 over plain HTTP. Without an
+  API token, anyone on your network can read monitoring data, and every control action (REST and MCP) is refused.
+  Installs upgraded from an earlier version without a token keep control actions working through
+  `ALLOW_UNAUTHENTICATED_WRITES` until you set a token (once a token is set, every request must send it). See
+  [Authentication](#authentication) and [Configuration → Authentication](docs/guides/configuration.md#authentication).
+- **Control scope**: with access, the REST API and MCP can reboot or shut down the server, start, stop, update and
+  remove Docker containers, control VMs (including snapshots and clones), start and stop the array, control parity
+  checks, spin disks up and down, and run User Scripts as `/bin/bash` without a sandbox. REST reboot, shutdown and
+  User Scripts need no confirmation. MCP read-only mode and tool policies apply to MCP only; they do not restrict the
+  REST API. See [Core Settings](docs/guides/configuration.md#core-settings) and
+  [Network Security](docs/guides/configuration.md#network-security).
+- **External WAN IP lookups**: when you request network access URLs (`GET /api/v1/network/access-urls` or the MCP
+  tool `get_network_access_urls`), the agent asks `api.ipify.org`, `ifconfig.me` and `icanhazip.com`, in that order,
+  for your WAN IP, and stops at the first answer. Those services see your server's public IP address. Nothing runs
+  at startup or on a schedule, and the result is not cached. If all three fail, the `WANIP=` value in Unraid's
+  `network.cfg` is used. Turn **WAN IP Lookup** off (`WAN_IP_LOOKUP=false`) to make no external requests; the WAN
+  entry then uses only `WANIP=`. See [WAN IP lookup](docs/guides/configuration.md#wan-ip-lookup).
 
 ## Architecture
 
@@ -438,7 +458,7 @@ curl -X POST http://localhost:8043/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_system_info","arguments":{}},"id":1}'
 ```
 
-For full MCP documentation including all 54 tools, 5 resources, and 3 prompts, see [docs/integrations/mcp.md](docs/integrations/mcp.md).
+For full MCP documentation including all 126 tools, 5 resources, and 6 prompts, see [docs/integrations/mcp.md](docs/integrations/mcp.md).
 
 ### Example API Usage
 
@@ -558,8 +578,9 @@ Changes require a service restart:
 
 ### Authentication
 
-The API is unauthenticated by default. Set an API token to require
-`Authorization: Bearer <token>`:
+Without an API token, network clients can read data, but control actions are
+refused (see [Security and Privacy](#security-and-privacy)). Set an API token to
+require `Authorization: Bearer <token>` and enable control actions:
 
 ```bash
 # In /boot/config/plugins/unraid-management-agent/config.cfg

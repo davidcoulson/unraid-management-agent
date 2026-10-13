@@ -17,14 +17,201 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumers can show the user's names and tell a flow meter on a fan header
   from a fan. Omitted for unlabelled channels and the sysfs fallback.
   ([#228](https://github.com/tinkerologie/unraid-management-agent/issues/228))
+- **WAN IP lookup setting** — `WAN_IP_LOOKUP` (`--wan-ip-lookup`, `wan_ip_lookup` in YAML, and a
+  **WAN IP Lookup** toggle on the plugin settings page) controls whether requesting network access URLs
+  asks `api.ipify.org`, `ifconfig.me` and `icanhazip.com` for the public IP. It defaults to on, so nothing
+  changes for existing installs; when off, no external request is made and the WAN entry uses only the
+  `WANIP=` value from Unraid's `network.cfg`. WAN discovery is now an injectable
+  `NetworkAccessDiscovery`, with tests for service order, first-answer short-circuit, invalid answers,
+  the `network.cfg` fallback, the disabled path and the request-only boundary; the existing access-URL
+  tests no longer contact the real services. Follow-up to the Community Applications review (#239).
+  ([#252](https://github.com/tinkerologie/unraid-management-agent/issues/252)).
+- **Network cards: NIC temperatures and optic diagnostics** — new optional `nic` collector
+  (default every 60 s, `INTERVAL_NIC`, listed on the plugin settings page), REST endpoint
+  `GET /api/v1/network/cards`, WebSocket event `nic_update` and read-only MCP tool
+  `get_network_cards`. Reports one entry per PCI network card (ports grouped by PCI slot;
+  virtual interfaces, USB NICs, SR-IOV VFs and switchdev representors skipped) with
+  vendor, model, driver, firmware and hwmon temperatures (ASIC, PHY, MAC, module cages),
+  and per port the link state plus the plugged optic's identity and DDM decoded from
+  SFF-8472 (SFP, incl. external calibration) or SFF-8636/SFF-8436 (QSFP): module
+  temperature and voltage, per-lane laser bias and TX/RX power (mW and dBm), alarm and
+  warning flags and thresholds. Module EEPROMs are read with the `SIOCETHTOOL`
+  `ETHTOOL_GMODULEINFO`/`ETHTOOL_GMODULEEEPROM` ioctl, so no process is spawned per port
+  and cycle. Vendor serial numbers are never reported.
+  ([#225](https://github.com/tinkerologie/unraid-management-agent/issues/225))
+- **Every NUT device, not only the first** — `GET /nut` and `nut_status_update` have a new
+  `statuses` list with the detailed status of every device `upsc -l` lists (a second UPS,
+  an ATS, a PDU …), in the same order. `status` stays the first device's, and `GET /ups`
+  stays the first NUT device (or apcupsd) and now says which one in `device_name`. A device
+  whose query fails is logged and left out. The NUT collector's command runner, `upsc`
+  lookup and file checks are injectable for tests.
+  ([#206](https://github.com/tinkerologie/unraid-management-agent/issues/206)).
+
+- **Exclusive share state** — `GET /shares` (and the share WebSocket/MQTT
+  payloads) now report Unraid 6.12+ exclusive share status per share:
+  `exclusive` (`/mnt/user/<share>` is a symlink that bypasses FUSE),
+  `exclusive_eligible` (exclusive shares are enabled, the share is pool-only,
+  and on Unraid before 7.2 it is not NFS-exported), `exclusive_pool` (the share's pool) and,
+  when an eligible share has fallen back to FUSE, `locations` listing every
+  pool or array disk that holds a top-level folder for it, so the stray copy
+  can be found (`locations_unchecked` names disks and pools that were skipped,
+  and never woken, because they are spun down, their spin state is unknown,
+  or the check failed). `exclusive` comes from emhttp's
+  `shares.ini`, so nothing is read through FUSE; the fields are omitted on
+  older releases and while the array is stopped.
+
+- **Stable `device_id` for USB HID hwmon chips, and same-model fans kept apart** —
+  `temperatures[]` and `fans[]` entries of `GET /api/v1/system` have a new `device_id`
+  for chips on a USB HID device (fan/pump controllers such as Aquacomputer Octo/Quadro,
+  Corsair Commander): the USB serial number, or `usb-<busnum>-<devpath>` when the
+  device has none. lm-sensors names these chips `<driver>-hid-<bus>-<hid id>`, and the
+  HID id changes whenever the device re-enumerates, so the chip name cannot be used as
+  an identity. It is read from `/sys/class/hwmon` once per collection and is omitted
+  for every other chip. `fans[]` entries also report their lm-sensors chip in `source`.
+  Fans keep their `<chip model>_<fanN>` names, except when two or more chips of the
+  same model report fans (two Octos): their fans are then named
+  `<chip model>-<device_id>_<fanN>` (or `<full chip name>_<fanN>` without a device ID)
+  instead of silently overwriting each other.
+- **Mandatory pre-submission governance for pull requests** — added a required
+  "Pre-Submission Governance" section to the PR template with mandatory
+  confirmation checkboxes (built and ran locally, `make test` passes,
+  `make pre-commit-run` passes, real verification output pasted, not a duplicate
+  or back-to-back spam PR, and human sign-off for AI-assisted PRs). The PR
+  Governance workflow now fails any PR that leaves these boxes unchecked, and
+  `CONTRIBUTING.md` documents the enforced rules. These apply to all authors,
+  including AI agents and automation.
+- **CI runner spam protection** — added a `concurrency` group with
+  `cancel-in-progress` to the PR Governance workflow and gated the Coverage
+  workflow to skip draft PRs, so rapid back-to-back pushes cancel superseded
+  runs instead of piling up and exhausting CI runners.
+- **Enforced GitHub issue forms for triage quality** — replaced legacy markdown
+  issue templates with structured GitHub Issue Forms (`01-bug-report.yml` and
+  `02-enhancement-request.yml`) based on the `vault` repository setup, with
+  required fields and required confirmations to read `CONTRIBUTING.md` and
+  `AGENTS.md`. Updated `.github/ISSUE_TEMPLATE/config.yml` contact links for
+  Discussions, private security disclosure, and contribution rules.
+- **Automated PR governance checks** — added GitHub Actions workflow enforcing
+  PR template completeness, exempting bots and draft PRs, stripping HTML comments
+  during section validation, and validating issue references (supporting issue
+  numbers, full URLs, and explicit "None" for self-contained changes).
+- **GitHub issue template configuration** — added `.github/ISSUE_TEMPLATE/config.yml`
+  with private security disclosure contact links.
+- **SAS storage topology** — new optional `storage_topology` collector (default every
+  300 s, `INTERVAL_STORAGE_TOPOLOGY`, listed on the plugin settings page), REST endpoint
+  `GET /api/v1/storage/topology`, WebSocket event `storage_topology_update` and read-only
+  MCP tool `get_storage_topology`. Combines storcli (controllers, PCIe link, HBA ports and
+  lanes, enclosures, per-drive paths/link speeds/error counters) with `sg_ses --json`
+  (PSUs, fan RPM, temperature/voltage/current sensors, I/O module status and firmware,
+  SAS connector cable map, slot status) and derives per-element problems, I/O module
+  firmware mismatches and path redundancy. Read-only and sequential: storcli always runs
+  with `J nolog`, never twice at once, with timeouts; works with sg_ses alone (plain HBAs)
+  and is a no-op (`state: "unsupported"`) without either tool.
+  ([#184](https://github.com/tinkerologie/unraid-management-agent/issues/184)).
+- **Storage topology throughput and link utilization** — `GET /api/v1/storage/topology`
+  controllers and enclosures now carry a `throughput` object (`read_bytes_per_sec`,
+  `write_bytes_per_sec`, `total_bytes_per_sec`, `capacity_bytes_per_sec`,
+  `utilization_percent`, `drives`, `interval_seconds`). Rates are the sector deltas of
+  each drive's block device in `/proc/diskstats` between two collections (kernel
+  counters only, nothing is sent to the drives); counter resets count as zero and the
+  object is omitted on the first collection. Capacity is the SAS payload rate of the
+  links (8b/10b: link rate in Gbps x 100 MB/s per lane): the controller's connected
+  phys, and for an enclosure the controller ports cabled directly to it (0, with no
+  `utilization_percent`, for an enclosure only reached through another enclosure).
+
+### Removed
+
+- **BREAKING: plugin update actions** — the agent no longer installs or updates other
+  Unraid plugins. `POST /api/v1/plugins/{name}/update` and `POST /api/v1/plugins/update-all`
+  now return 404, and the MCP tools `update_plugin` and `update_all_plugins` are no longer
+  registered (a stored tool-policy override for either name has no effect). Apply plugin
+  updates from Unraid's **Plugins** page. Update availability checks are unchanged: the
+  plugin update collector, `GET /api/v1/plugins/check-updates`,
+  `POST /api/v1/plugins/updates/refresh`, and the `check_plugin_updates` and
+  `refresh_plugin_updates` MCP tools. Required for Community Applications approval (#239).
+  ([#244](https://github.com/tinkerologie/unraid-management-agent/issues/244)).
+
+### Security
+
+- **Release bundle pinned with SHA256** — the `.plg` now carries a `sha256` entity and a
+  `<SHA256>` element next to `<MD5>`; Unraid's plugin manager verifies SHA256 first. Each release
+  computes both checksums, publishes `SHA256SUM` and the SHA256 in the release notes, and writes
+  both into the `.plg` with `scripts/update-plg-checksums.sh`, which checks their format, refuses
+  a `.plg` whose `version` differs from the release, and asserts the written values. The rewrite
+  now runs before the GitHub release is created, so a failure blocks publication. The checksum
+  lines carry `pragma: allowlist secret`, so detect-secrets no longer needs a baseline entry that
+  goes stale every release. Seeded with the SHA256 of the published v2026.09.01 bundle. Reported
+  in the Community Applications review (#239).
+  ([#247](https://github.com/tinkerologie/unraid-management-agent/issues/247)).
+- **BREAKING: no unauthenticated network writes by default** — with no `API_TOKEN`, the REST
+  API now answers `POST`, `PUT`, `PATCH` and `DELETE` with `403 Forbidden` and a message on
+  how to set a token, and HTTP MCP (`/mcp`, `/mcp/<connect-secret>`) treats every write tool
+  as read-only. Reads, WebSocket subscriptions and MCP read tools still work without a
+  token, and STDIO MCP is unaffected. `ALLOW_UNAUTHENTICATED_WRITES`
+  (`--allow-unauthenticated-writes`, `allow_unauthenticated_writes` in YAML) restores the old
+  behaviour and has no effect once a token is set. **Existing plugin installs without a
+  token** get `ALLOW_UNAUTHENTICATED_WRITES="true"` once on upgrade, so their clients keep
+  working, and the settings page shows a warning: set a token, add it to your clients, then
+  turn the option off. **Daemons started directly** (CLI, environment or YAML) are not
+  migrated and lose tokenless write access until `API_TOKEN` or the opt-out is set. The
+  settings page gains the opt-out toggle and a read-only notice, and saving tool policies
+  without a token stores them for the next start instead of failing. Reported in the
+  Community Applications review (#239).
+  ([#245](https://github.com/tinkerologie/unraid-management-agent/issues/245)).
+- **Bundle extraction no longer changes system directory owners** — release bundles
+  stored every entry with the GitHub Actions runner owner (uid/gid 1001), and the
+  installer's root `tar -xzf` applied it to `/usr`, `/usr/local`, `/usr/local/emhttp`
+  and `/usr/local/emhttp/plugins` on every install and boot. The installer now extracts
+  with `--no-same-owner --no-overwrite-dir`, restores `root:root` (non-recursive) on
+  those directories and the plugin directory when an earlier install changed them, and
+  `make package` builds the archive with numeric owner `0/0` on GNU tar and bsdtar. The
+  release workflow refuses to publish a bundle with any other owner, and a new
+  `Bundle Ownership` CI job (`make test-packaging`) runs the `.plg` extraction command and
+  repair loop as root against a uid-1001 archive and checks tar flag selection. Reported in #239.
+  ([#242](https://github.com/tinkerologie/unraid-management-agent/issues/242)).
 
 ### Changed
+
+- **`make pre-commit-run` passes on a clean checkout** — the storage-topology hardware fixtures
+  are excluded from the whitespace, end-of-file, line-ending, Prettier and detect-secrets hooks
+  and marked byte-exact in `.gitattributes` and `.editorconfig`; generated Swagger keeps its
+  missing final newline; codespell ignores `unparseable` and `ser`; `.secrets.baseline` is
+  refreshed with every new false positive audited; Prettier and markdownlint fixes are applied
+  (`[Unreleased]` now has one subsection per type). The gosec hook and `make security-check`
+  run gosec (with errcheck, which covers G104) through golangci-lint, because standalone gosec v2.29.0 cannot read Go 1.27 export
+  data. `scripts/setup-pre-commit.sh` installs golangci-lint v2 and goimports. MQTT tests accept
+  a 0 ms connection latency, which an immediate failure can report.
+  ([#249](https://github.com/tinkerologie/unraid-management-agent/issues/249)).
+- **Disclosed security and privacy behaviour** — the Community Applications listing
+  (`unraid-management-agent.xml`), `README.md` and the plugin README now state the authentication
+  default (reads without a token, control actions refused until one is set), the REST/MCP control
+  scope including User Scripts, and the on-request WAN IP lookups to `api.ipify.org`,
+  `ifconfig.me` and `icanhazip.com`. Documentation only; an opt-out for the lookups is tracked in
+  #252. Reported in the Community Applications review (#239).
+  ([#246](https://github.com/tinkerologie/unraid-management-agent/issues/246)).
+- Pull requests get path labels and at most one type label, `bug` or `enhancement`, from the shared tinkerologie PR labeler. Dependabot pull requests whose largest update is a patch or minor version merge automatically once the checks and commit statuses on their head commit have finished without a failure (a Codecov check that is still pending is not waited for; a Codecov failure blocks); majors, and pull requests with open review threads, stay for review.
+- Release workflows hardened (least-privilege job permissions, no expressions in shell scripts, no persisted checkout credentials, no dependency caches); scheduled workflows run on Australia/Brisbane time.
+- Releases push the updated PLG hash to `main` with a token from the Tinkerologie-Release GitHub App, the only actor allowed to bypass the pull-request rule on `main`, so the Unraid plugin manager and Community Applications see each new release.
 - Tinkerologie-Bot governance report updated to v1.4.3: an older run can no longer post a stale report after a newer run passed. Workflow formatting tidied.
 - Repository standardised to the tinkerologie layout (STANDARDS.md in tinkerologie/.github): workflows renamed to the standard set (CI, Validate, Release, PR Governance, ...), every action pinned to a commit SHA, shared Dependabot, `.editorconfig`, `.gitattributes` and `CODEOWNERS` files, and organization-wide labels and community files.
 - Tinkerologie-Bot's comment is now a readable "Pull request checklist": each problem is a numbered heading with plain-English guidance and its items listed underneath, and report updates for a pull request are serialised so an older run can never overwrite a newer one.
 - Contribution governance: issues without a `bug` or `enhancement` label are labeled automatically when their type can be determined (issues labeled `question`, `duplicate`, `invalid`, `wontfix`, or `no-type` are skipped), so CodeRabbit can plan them. Pull requests that conflict with the default branch are labeled, and their authors are notified in a comment. Stale issues and pull requests are labeled after 14 days without activity and closed 30 days later. PR governance now re-validates a human-authored, non-draft PR when a bot such as CodeRabbit edits its description, instead of skipping the check and reporting a pass, only maintainers with write access may use `None` instead of linking an issue, and a link to an issue that does not exist now fails the check. Codecov patch coverage must now reach 90%.
 - Tinkerologie-Bot now posts one comment on pull requests that fail PR governance, listing every problem to fix, and updates it once they are fixed. PR governance runs from the default branch's workflow (`pull_request_target`), so a pull request cannot change its own check.
 - Configured Codecov GitHub Actions workflow for tokenless coverage uploads
+- **Faster `/services`** — the rc status checks behind `GET /api/v1/services`, the MCP
+  `list_services` tool and the MQTT service states now run up to 4 at a time instead of one
+  after another (about 2.7 s per request before), each with a 15 s timeout, and keep their
+  order. New `lib.ExecCommandOutputWithTimeout` stops a status script's child processes from
+  holding the call past its deadline.
+  ([#201](https://github.com/tinkerologie/unraid-management-agent/issues/201)).
+- **GitHub Actions Ubuntu runner policy** — set release workflow jobs to
+  `ubuntu-latest` so CI always tracks the latest supported Ubuntu GitHub-hosted
+  image.
+- **Automated Codecov reporting in CI** — added a dedicated GitHub Actions
+  coverage workflow running `go test -covermode=atomic -coverprofile=coverage.out ./...`
+  on `push` to `main` and `pull_request` events with concurrency cancellation,
+  uploading to Codecov via `codecov/codecov-action@v5` (including tokenless uploads
+  for public repository fork pull requests), and configured repository status
+  thresholds in `.codecov.yml` with exclusions for generated Swagger docs and tests.
 
 ### Tests
 
@@ -86,95 +273,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#192](https://github.com/tinkerologie/unraid-management-agent/issues/192)).
 - **Coverage uplift phases 1–5 completion (issue #192)** — completed all five phases
   from the test coverage plan:
-  - *Phase 1 (Reporting Alignment)*: aligned `Makefile` `test-coverage` target
+  - _Phase 1 (Reporting Alignment)_: aligned `Makefile` `test-coverage` target
     (`-covermode=atomic`, filtering out `daemon/docs` and `tests`), documented line
     vs statement coverage in `docs/development/code-quality.md`, and gated host-dependent
     Docker SDK and `virt-clone` tests with `//go:build integration`.
-  - *Phase 2 (Collectors & Device Parsing)*: extracted pure parsing functions in
+  - _Phase 2 (Collectors & Device Parsing)_: extracted pure parsing functions in
     `ups.go` (`parseAPCOutput`, `parseNUTUpscOutput`), `nut.go` (`parseNUTConfig`,
     `parseNUTStatusOutput`), and `zfs.go` (`parseZPoolListOutput`, `parseZPoolStatusOutput`,
     `parseZFSDatasetListOutput`, `parseZFSSnapshotListOutput`), adding thorough table-driven
     unit tests for pool states, vdev trees, and datasets.
-  - *Phase 3 (Controllers & Execution Seams)*: added injected execution seams and unit
+  - _Phase 3 (Controllers & Execution Seams)_: added injected execution seams and unit
     tests for `array.go` (start/stop, parity checks, spin modes), `service.go` (start/stop/restart),
     `vm.go` (`pmWakeup`, snapshot lists, clone), `guard.go` (`binaryExists`), and
     `fan_safety.go` (temperature probes and PWM safety bounds).
-  - *Phase 4 (Deterministic Lifecycle & Subscriptions)*: eliminated arbitrary `time.Sleep`
+  - _Phase 4 (Deterministic Lifecycle & Subscriptions)_: eliminated arbitrary `time.Sleep`
     calls in `collector_manager_test.go` and `subscribe_events_test.go` using channel waits,
     bounded polling helpers, and `WSHub.ClientCount()`; refactored `Orchestrator.Run` with
     an isolated, tested `shutdown()` helper.
-  - *Phase 5 (Logger & Diagnostics)*: added log capture tests in `logger_test.go`,
+  - _Phase 5 (Logger & Diagnostics)_: added log capture tests in `logger_test.go`,
     injected bundle/archive seams with comprehensive unit tests for `handleDiagnosticsBundle`
     in `diagnostics_test.go`, and documented redacted ZIP vs unredacted shell diagnostics in
     `docs/troubleshooting/diagnostics.md` and `docs/api/diagnostics.md`.
-  ([#192](https://github.com/tinkerologie/unraid-management-agent/issues/192)).
-
-### Added
-
-- **Every NUT device, not only the first** — `GET /nut` and `nut_status_update` have a new
-  `statuses` list with the detailed status of every device `upsc -l` lists (a second UPS,
-  an ATS, a PDU …), in the same order. `status` stays the first device's, and `GET /ups`
-  stays the first NUT device (or apcupsd) and now says which one in `device_name`. A device
-  whose query fails is logged and left out. The NUT collector's command runner, `upsc`
-  lookup and file checks are injectable for tests.
-  ([#206](https://github.com/tinkerologie/unraid-management-agent/issues/206)).
-- **Stable `device_id` for USB HID hwmon chips, and same-model fans kept apart** —
-  `temperatures[]` and `fans[]` entries of `GET /api/v1/system` have a new `device_id`
-  for chips on a USB HID device (fan/pump controllers such as Aquacomputer Octo/Quadro,
-  Corsair Commander): the USB serial number, or `usb-<busnum>-<devpath>` when the
-  device has none. lm-sensors names these chips `<driver>-hid-<bus>-<hid id>`, and the
-  HID id changes whenever the device re-enumerates, so the chip name cannot be used as
-  an identity. It is read from `/sys/class/hwmon` once per collection and is omitted
-  for every other chip. `fans[]` entries also report their lm-sensors chip in `source`.
-  Fans keep their `<chip model>_<fanN>` names, except when two or more chips of the
-  same model report fans (two Octos): their fans are then named
-  `<chip model>-<device_id>_<fanN>` (or `<full chip name>_<fanN>` without a device ID)
-  instead of silently overwriting each other.
-- **Mandatory pre-submission governance for pull requests** — added a required
-  "Pre-Submission Governance" section to the PR template with mandatory
-  confirmation checkboxes (built and ran locally, `make test` passes,
-  `make pre-commit-run` passes, real verification output pasted, not a duplicate
-  or back-to-back spam PR, and human sign-off for AI-assisted PRs). The PR
-  Governance workflow now fails any PR that leaves these boxes unchecked, and
-  `CONTRIBUTING.md` documents the enforced rules. These apply to all authors,
-  including AI agents and automation.
-- **CI runner spam protection** — added a `concurrency` group with
-  `cancel-in-progress` to the PR Governance workflow and gated the Coverage
-  workflow to skip draft PRs, so rapid back-to-back pushes cancel superseded
-  runs instead of piling up and exhausting CI runners.
-- **Enforced GitHub issue forms for triage quality** — replaced legacy markdown
-  issue templates with structured GitHub Issue Forms (`01-bug-report.yml` and
-  `02-enhancement-request.yml`) based on the `vault` repository setup, with
-  required fields and required confirmations to read `CONTRIBUTING.md` and
-  `AGENTS.md`. Updated `.github/ISSUE_TEMPLATE/config.yml` contact links for
-  Discussions, private security disclosure, and contribution rules.
-- **Automated PR governance checks** — added GitHub Actions workflow enforcing
-  PR template completeness, exempting bots and draft PRs, stripping HTML comments
-  during section validation, and validating issue references (supporting issue
-  numbers, full URLs, and explicit "None" for self-contained changes).
-- **GitHub issue template configuration** — added `.github/ISSUE_TEMPLATE/config.yml`
-  with private security disclosure contact links.
-- **SAS storage topology** — new optional `storage_topology` collector (default every
-  300 s, `INTERVAL_STORAGE_TOPOLOGY`, listed on the plugin settings page), REST endpoint
-  `GET /api/v1/storage/topology`, WebSocket event `storage_topology_update` and read-only
-  MCP tool `get_storage_topology`. Combines storcli (controllers, PCIe link, HBA ports and
-  lanes, enclosures, per-drive paths/link speeds/error counters) with `sg_ses --json`
-  (PSUs, fan RPM, temperature/voltage/current sensors, I/O module status and firmware,
-  SAS connector cable map, slot status) and derives per-element problems, I/O module
-  firmware mismatches and path redundancy. Read-only and sequential: storcli always runs
-  with `J nolog`, never twice at once, with timeouts; works with sg_ses alone (plain HBAs)
-  and is a no-op (`state: "unsupported"`) without either tool.
-  ([#184](https://github.com/tinkerologie/unraid-management-agent/issues/184)).
-- **Storage topology throughput and link utilization** — `GET /api/v1/storage/topology`
-  controllers and enclosures now carry a `throughput` object (`read_bytes_per_sec`,
-  `write_bytes_per_sec`, `total_bytes_per_sec`, `capacity_bytes_per_sec`,
-  `utilization_percent`, `drives`, `interval_seconds`). Rates are the sector deltas of
-  each drive's block device in `/proc/diskstats` between two collections (kernel
-  counters only, nothing is sent to the drives); counter resets count as zero and the
-  object is omitted on the first collection. Capacity is the SAS payload rate of the
-  links (8b/10b: link rate in Gbps x 100 MB/s per lane): the controller's connected
-  phys, and for an enclosure the controller ports cabled directly to it (0, with no
-  `utilization_percent`, for an enclosure only reached through another enclosure).
+    ([#192](https://github.com/tinkerologie/unraid-management-agent/issues/192)).
 
 ### Fixed
 
@@ -199,27 +319,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#199](https://github.com/tinkerologie/unraid-management-agent/issues/199)).
 - **CI coverage test on Linux** — allowed HTTP 200 in `TestLogFileEndpoint` when `/var/log/syslog` exists on Linux runners, unblocking coverage profile generation.
 - **Codecov PR comments** — configured `.codecov.yml` with `require_changes: false` so coverage reports are posted on all pull requests.
-
-### Changed
-
-- **Faster `/services`** — the rc status checks behind `GET /api/v1/services`, the MCP
-  `list_services` tool and the MQTT service states now run up to 4 at a time instead of one
-  after another (about 2.7 s per request before), each with a 15 s timeout, and keep their
-  order. New `lib.ExecCommandOutputWithTimeout` stops a status script's child processes from
-  holding the call past its deadline.
-  ([#201](https://github.com/tinkerologie/unraid-management-agent/issues/201)).
-- **GitHub Actions Ubuntu runner policy** — set release workflow jobs to
-  `ubuntu-latest` so CI always tracks the latest supported Ubuntu GitHub-hosted
-  image.
-- **Automated Codecov reporting in CI** — added a dedicated GitHub Actions
-  coverage workflow running `go test -covermode=atomic -coverprofile=coverage.out ./...`
-  on `push` to `main` and `pull_request` events with concurrency cancellation,
-  uploading to Codecov via `codecov/codecov-action@v5` (including tokenless uploads
-  for public repository fork pull requests), and configured repository status
-  thresholds in `.codecov.yml` with exclusions for generated Swagger docs and tests.
-
-### Fixed
-
 - **WireGuard always reported as not running** — `/etc/rc.d/rc.wireguard status` exits 1 even
   when tunnels are up, so `GET /api/v1/services`, the MCP `get_service_status`/`list_services`
   tools and the MQTT WireGuard service switch always showed it stopped. The status check now

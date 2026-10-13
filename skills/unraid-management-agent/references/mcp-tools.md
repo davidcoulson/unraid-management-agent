@@ -1,6 +1,6 @@
 # MCP Tool Catalog
 
-All **125 MCP tools** exposed by the Unraid Management Agent, grouped by purpose.
+All **126 MCP tools** exposed by the Unraid Management Agent, grouped by purpose.
 
 - **R** = read-only (`ReadOnlyHint: true`) — safe to call freely.
 - **W** = write/control — changes the system.
@@ -8,7 +8,7 @@ All **125 MCP tools** exposed by the Unraid Management Agent, grouped by purpose
 
 Tool names are exact. Do not invent or alias them.
 
-> Counts: 125 tools + 5 resources + 6 prompts. Resources and prompts are listed
+> Counts: 126 tools + 5 resources + 6 prompts. Resources and prompts are listed
 > in `diagnostics.md`.
 
 ---
@@ -123,6 +123,7 @@ Tool names are exact. Do not invent or alias them.
 | R | `refresh_plugin_updates` | Force a plugin update check (all) |
 | R | `get_mover_status` | Mover active state, schedule, last run |
 | R | `get_storage_topology` | SAS controllers, HBA ports, shelves (PSUs, fans, sensors, IOM firmware, cabling), drive paths |
+| R | `get_network_cards` | PCI network cards: ASIC/PHY/MAC temperatures, port link state, SFP/QSFP optic diagnostics (DDM) |
 | R | `get_service_status` | Status of one system service |
 | R | `list_services` | All managed services + status |
 
@@ -183,8 +184,6 @@ Tool names are exact. Do not invent or alias them.
 
 | R/W | Tool | Purpose |
 | --- | --- | --- |
-| W | `update_plugin` | Update one plugin |
-| W ⚠️ | `update_all_plugins` | Update all plugins with available updates |
 | W ⚠️ | `remote_share_action` | Mount/unmount an SMB/NFS remote share by source (confirm=true) |
 
 ---

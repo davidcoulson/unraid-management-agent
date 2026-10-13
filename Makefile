@@ -5,7 +5,7 @@ PLUGIN_DIR := meta/plugin
 DATE := $(shell date '+%Y.%m.%d')
 HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 
-.PHONY: all local release package clean test test-coverage deps swagger pre-commit-install pre-commit-run lint security-check
+.PHONY: all local release package clean test test-packaging test-coverage deps swagger pre-commit-install pre-commit-run lint security-check
 
 all: test local
 
@@ -42,12 +42,23 @@ package: release
 	cp VERSION $(BUILD_DIR)/usr/local/emhttp/plugins/$(BINARY)/
 	COPYFILE_DISABLE=1 cp -r $(PLUGIN_DIR)/. $(BUILD_DIR)/usr/local/emhttp/plugins/$(BINARY)/
 	find $(BUILD_DIR)/usr/local/emhttp/plugins/$(BINARY) -name '._*' -delete 2>/dev/null || true
-	cd $(BUILD_DIR) && COPYFILE_DISABLE=1 tar -czf $(BINARY)-$(VERSION).tgz usr/
+	@# Archive entries must be owned by root so extraction never chowns system dirs (#242)
+	OWNER_FLAGS=$$(sh scripts/tar-owner-flags.sh) && \
+		cd $(BUILD_DIR) && COPYFILE_DISABLE=1 tar $$OWNER_FLAGS -czf $(BINARY)-$(VERSION).tgz usr/
 	@echo "Package created: $(BUILD_DIR)/$(BINARY)-$(VERSION).tgz"
 
 test:
 	@echo "Running tests..."
 	go test -v ./...
+
+test-packaging: package
+	@echo "Running bundle packaging tests..."
+	bash scripts/test-bundle-extraction.sh check-tar-flags
+	bash scripts/test-bundle-extraction.sh check-owners $(BUILD_DIR)/$(BINARY)-$(VERSION).tgz
+	sudo bash scripts/test-bundle-extraction.sh
+	bash scripts/test-secure-defaults-migration.sh
+	bash scripts/test-plg-checksums.sh
+	bash scripts/test-plugin-settings.sh
 
 test-coverage:
 	@echo "Running tests with coverage..."
@@ -102,11 +113,11 @@ lint:
 # Security checks
 security-check:
 	@echo "Running security checks..."
-	@echo "→ Running gosec..."
-	@if command -v gosec >/dev/null 2>&1; then \
-		gosec -fmt=text -exclude-dir=vendor -exclude-dir=tests -exclude=G115,G304,G301,G306,G703,G204,G117 -severity=medium -confidence=medium ./...; \
+	@echo "→ Running gosec (via golangci-lint; standalone gosec cannot read Go 1.27 export data)..."
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run --enable-only gosec,errcheck --max-issues-per-linter=0 --max-same-issues=0 ./...; \
 	else \
-		echo "⚠️  gosec not found. Install with: go install github.com/securego/gosec/v2/cmd/gosec@latest"; \
+		echo "⚠️  golangci-lint not found. Install with: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
 	fi
 	@echo "→ Running govulncheck..."
 	@if command -v govulncheck >/dev/null 2>&1; then \

@@ -16,7 +16,6 @@ All AI coding assistants (Claude Code, Gemini, GitHub Copilot, Cursor, Roo, Devi
 10. Ready for Review: Only mark the PR as ready for review (`gh pr ready`) once all checks pass and all due diligence is verified.
 11. Review Clearance: Review and resolve all CodeRabbit AI and GitHub Copilot comments. Ensure Codecov reports show zero errors, zero warnings, and no coverage drop.
 
-
 > Single source of truth for all AI coding assistants working on this project.
 > Individual tool files (CLAUDE.md, GEMINI.md, copilot-instructions.md, .cursorrules) point here.
 
@@ -146,6 +145,7 @@ Independent goroutines that collect data at fixed intervals (defined in `daemon/
 | Hardware     | 300s     | `hardware_update`           | Rarely changes                           |
 | Registration | 300s     | `registration_update`       | License info                             |
 | Storage      | 300s     | `storage_topology_update`   | SAS topology via storcli + sg_ses        |
+| NIC          | 60s      | `nic_update`                | NIC temperatures + optic DDM (ioctl)     |
 
 **Intervals optimized for power efficiency** — lower intervals increase CPU usage.
 
@@ -166,7 +166,7 @@ Each collector:
 
 Model Context Protocol endpoint at `POST /mcp` (Streamable HTTP, spec 2025-06-18):
 
-- **server.go**: MCP server with 125 tools, 5 resources, and 6 prompts for monitoring and control
+- **server.go**: MCP server with 126 tools, 5 resources, and 6 prompts for monitoring and control
 - **transport.go**: HTTP transport for JSON-RPC requests
 - Tools expose system info, Docker/VM control, notifications, etc.
 
@@ -452,12 +452,14 @@ Uses date-based versioning: `YYYY.MM.DD` (e.g., `2025.12.01`).
 2. **Update `VERSION` file** with new version number
 3. **Update `unraid-management-agent.plg`**:
    - Set `<!ENTITY version "YYYY.MM.DD">`
-   - Set `<!ENTITY md5 "...">` with checksum **from GitHub release** (not local build)
-   - MD5 must match the GitHub release artifact
+   - Leave the `md5` and `sha256` entities alone: the release workflow writes both from the built
+     artifact with `scripts/update-plg-checksums.sh`, before publishing and again on `main`
+   - Keep the `<!-- pragma: allowlist secret -->` comments on both checksum lines (detect-secrets)
 4. **Update `unraid-management-agent.xml`** as needed for listing metadata changes
 5. **Tag and push:** `git tag vYYYY.MM.DD && git push origin vYYYY.MM.DD`
 6. GitHub Actions builds and releases automatically
-7. Verify MD5 matches published release artifact
+7. Verify the `.plg` on `main` pins the release: `sha256sum` of the published `.tgz` equals the `sha256` entity
+   (the plugin manager verifies SHA256 first and also checks MD5)
 
 ## Hardware Compatibility
 
