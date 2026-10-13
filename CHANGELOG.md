@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one keeps its slot until it exits; 15 s timeout). Serial numbers are never
   reported.
   ([#227](https://github.com/tinkerologie/unraid-management-agent/issues/227))
+- **Fan channel labels** — each fan in `/api/v1/system` (`fans[]`) now has an
+  optional `label`: the channel's lm-sensors label (the driver's `fanN_label`
+  or a `sensors.conf` `label` override, e.g. `"Coolant Flow (rpm)"`), so
+  consumers can show the user's names and tell a flow meter on a fan header
+  from a fan. Omitted for unlabelled channels and the sysfs fallback.
+  ([#228](https://github.com/tinkerologie/unraid-management-agent/issues/228))
 - **WAN IP lookup setting** — `WAN_IP_LOOKUP` (`--wan-ip-lookup`, `wan_ip_lookup` in YAML, and a
   **WAN IP Lookup** toggle on the plugin settings page) controls whether requesting network access URLs
   asks `api.ipify.org`, `ifconfig.me` and `icanhazip.com` for the public IP. It defaults to on, so nothing

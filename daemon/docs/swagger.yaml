@@ -1167,7 +1167,7 @@ definitions:
         example: 100
         type: integer
       collected_at:
-        description: When these values were read
+        description: When these values were read; omitted until a read succeeds
         type: string
       critical_warning:
         description: NVMe critical warning bitmask; 0 = none
@@ -1592,6 +1592,13 @@ definitions:
           USB HID chips (whose lm-sensors name changes on every re-enumeration):
           the USB serial number, or "usb-<busnum>-<devpath>" when it has none.
         example: 07274-50017
+        type: string
+      label:
+        description: |-
+          Label is the channel's label from lm-sensors (the driver's fanN_label
+          or a sensors.conf `label` override), e.g. "Coolant Flow (rpm)". Empty
+          when the channel has no label beyond its name (e.g. "fan1").
+        example: Coolant Flow (rpm)
         type: string
       name:
         example: CPU Fan
@@ -5197,9 +5204,10 @@ definitions:
         allOf:
         - $ref: '#/definitions/dto.DriveHealth'
         description: |-
-          Health is the disk's SMART data from the last successful read, or nil
-          when it has never been read (smartctl missing, disk unresolved, or the
-          disk was asleep at every attempt).
+          Health is the disk's SMART data from the last successful read. It is
+          nil when the disk cannot be read at all (smartctl missing, disk
+          unresolved, or no readable SMART transport such as USB). A disk that was
+          asleep at every attempt has a Health with only Standby set.
       name:
         description: Member name as `zpool status` prints it
         example: nvme0n1p1

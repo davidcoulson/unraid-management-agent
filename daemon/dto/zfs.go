@@ -92,9 +92,10 @@ type ZFSDrive struct {
 	Vdev  string `json:"vdev,omitempty" example:"raidz2-0"` // Parent vdev; empty for a single-disk vdev
 	State string `json:"state" example:"ONLINE"`
 
-	// Health is the disk's SMART data from the last successful read, or nil
-	// when it has never been read (smartctl missing, disk unresolved, or the
-	// disk was asleep at every attempt).
+	// Health is the disk's SMART data from the last successful read. It is
+	// nil when the disk cannot be read at all (smartctl missing, disk
+	// unresolved, or no readable SMART transport such as USB). A disk that was
+	// asleep at every attempt has a Health with only Standby set.
 	Health *DriveHealth `json:"health,omitempty"`
 }
 
@@ -123,7 +124,7 @@ type DriveHealth struct {
 	MediaErrors  *uint64 `json:"media_errors,omitempty" example:"0"`
 	PowerOnHours *uint64 `json:"power_on_hours,omitempty" example:"8760"`
 
-	CollectedAt time.Time `json:"collected_at"` // When these values were read
+	CollectedAt time.Time `json:"collected_at,omitzero"` // When these values were read; omitted until a read succeeds
 }
 
 // ZFSDataset represents a ZFS dataset (filesystem or volume)
