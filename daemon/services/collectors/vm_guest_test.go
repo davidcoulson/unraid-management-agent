@@ -1,0 +1,445 @@
+package collectors
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/digitalocean/go-libvirt"
+
+	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
+	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
+)
+
+// fakeGuestProgram is the result of one program run through guest-exec.
+type fakeGuestProgram struct {
+	out, stderr string
+	exitCode    int
+	running     bool // never exits
+}
+
+// fakeGuest is a libvirt connection to VMs with a guest agent.
+type fakeGuest struct {
+	mu        sync.Mutex
+	states    map[string]libvirt.DomainState // missing: VM not found
+	stateErr  error
+	agentDown bool
+	replies   map[string]string // command -> JSON "return" value
+	programs  map[string]fakeGuestProgram
+	badReply  string // command whose reply is not JSON
+	empty     string // command with an empty reply
+	pids      map[int]string
+}
+
+func (f *fakeGuest) DomainLookupByName(name string) (libvirt.Domain, error) {
+	if _, ok := f.states[name]; !ok {
+		return libvirt.Domain{}, errors.New("no domain")
+	}
+	return libvirt.Domain{Name: name}, nil
+}
+
+func (f *fakeGuest) DomainGetState(dom libvirt.Domain, _ uint32) (int32, int32, error) {
+	if f.stateErr != nil {
+		return 0, 0, f.stateErr
+	}
+	return int32(f.states[dom.Name]), 0, nil
+}
+
+func (f *fakeGuest) QEMUDomainAgentCommand(_ libvirt.Domain, cmd string, _ int32, _ uint32) (libvirt.OptString, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.agentDown {
+		return nil, errors.New("guest agent is not connected")
+	}
+	var req struct {
+		Execute   string          `json:"execute"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	_ = json.Unmarshal([]byte(cmd), &req)
+	switch req.Execute {
+	case f.badReply:
+		return libvirt.OptString{"not json"}, nil
+	case f.empty:
+		return libvirt.OptString{}, nil
+	case "guest-exec":
+		var args struct {
+			Path string   `json:"path"`
+			Arg  []string `json:"arg"`
+		}
+		_ = json.Unmarshal(req.Arguments, &args)
+		if _, ok := f.programs[args.Path]; !ok {
+			return nil, errors.New("Failed to execute child process (No such file or directory)")
+		}
+		if f.pids == nil {
+			f.pids = map[int]string{}
+		}
+		pid := len(f.pids) + 100
+		f.pids[pid] = args.Path
+		return libvirt.OptString{`{"return":{"pid":` + itoa(pid) + `}}`}, nil
+	case "guest-exec-status":
+		var args struct {
+			PID int `json:"pid"`
+		}
+		_ = json.Unmarshal(req.Arguments, &args)
+		p := f.programs[f.pids[args.PID]]
+		if p.running {
+			return libvirt.OptString{`{"return":{"exited":false}}`}, nil
+		}
+		status, _ := json.Marshal(map[string]any{"return": map[string]any{
+			"exited":   true,
+			"exitcode": p.exitCode,
+			"out-data": base64.StdEncoding.EncodeToString([]byte(p.out)),
+			"err-data": base64.StdEncoding.EncodeToString([]byte(p.stderr)),
+		}})
+		return libvirt.OptString{string(status)}, nil
+	}
+	if r, ok := f.replies[req.Execute]; ok {
+		return libvirt.OptString{`{"return":` + r + `}`}, nil
+	}
+	return libvirt.OptString{`{"return":{}}`}, nil
+}
+
+func (f *fakeGuest) Disconnect() error { return nil }
+
+func itoa(n int) string {
+	b, _ := json.Marshal(n)
+	return string(b)
+}
+
+const (
+	testSMIOut  = "0, NVIDIA GeForce RTX 4090, 34, 12, 13, 24564, 63.29, 0, 2535\r\n"
+	testDiskOut = `{"Model":"WD_BLACK SN850X 4000GB","Serial":"E823_8FA6. ","Bus":"NVMe","Temp":35,"TempMax":90,"Wear":1}`
+	testFSInfo  = `[{"mountpoint":"C:\\","type":"NTFS","total-bytes":1000,"used-bytes":400},{"mountpoint":"","type":"FAT32"}]`
+)
+
+func windowsGuest() *fakeGuest {
+	return &fakeGuest{
+		states: map[string]libvirt.DomainState{"Windows 11": libvirt.DomainRunning},
+		replies: map[string]string{
+			"guest-get-host-name": `{"host-name":"WIN11"}`,
+			"guest-get-osinfo":    `{"id":"mswindows","pretty-name":"Microsoft Windows 11"}`,
+			"guest-get-fsinfo":    testFSInfo,
+		},
+		programs: map[string]fakeGuestProgram{
+			guestNvidiaSMIWindows: {out: testSMIOut},
+			guestPowerShell:       {out: testDiskOut},
+			"fps.exe":             {out: " 144\r\n"},
+		},
+	}
+}
+
+func fastGuestExec(t *testing.T) {
+	t.Helper()
+	oldPoll, oldTimeout := guestExecPoll, guestExecTimeout
+	guestExecPoll, guestExecTimeout = time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { guestExecPoll, guestExecTimeout = oldPoll, oldTimeout })
+}
+
+func testPoller(f *fakeGuest, sensors ...domain.VMGuestSensorConfig) (*vmGuestPoller, chan any) {
+	hub := domain.NewEventBus(100)
+	sub := hub.Sub("vm_guest_update")
+	p := newVMGuestPoller(domain.VMGuestConfig{VMs: []string{"Windows 11"}, Interval: 30, Sensors: sensors}, hub)
+	p.dial = func() (guestConn, error) { return f, nil }
+	return p, sub
+}
+
+func nextGuestUpdate(t *testing.T, sub chan any) *dto.VMGuestInfo {
+	t.Helper()
+	select {
+	case msg := <-sub:
+		infos := msg.([]*dto.VMGuestInfo)
+		if len(infos) != 1 {
+			t.Fatalf("got %d VMs, want 1", len(infos))
+		}
+		return infos[0]
+	case <-time.After(2 * time.Second):
+		t.Fatal("no vm_guest_update published")
+	}
+	return nil
+}
+
+var fpsSensor = domain.VMGuestSensorConfig{VM: "Windows 11", Name: "fps", Command: []string{"fps.exe", "fps"}, Interval: 5}
+
+func TestVMGuestPoller_RunningWindows(t *testing.T) {
+	fastGuestExec(t)
+	p, sub := testPoller(windowsGuest(), fpsSensor)
+
+	p.updateAll()
+	info := nextGuestUpdate(t, sub)
+	if !info.Running || !info.AgentConnected || info.Hostname != "WIN11" || info.OSName != "Microsoft Windows 11" {
+		t.Errorf("info = %+v", info)
+	}
+	if len(info.Filesystems) != 1 || *info.Filesystems[0].UsedBytes != 400 {
+		t.Errorf("filesystems = %+v", info.Filesystems)
+	}
+	if len(info.GPUs) != 1 || *info.GPUs[0].TemperatureC != 34 || *info.GPUs[0].MemoryTotalBytes != 24564*1024*1024 {
+		t.Errorf("gpus = %+v", info.GPUs)
+	}
+	if len(info.Disks) != 1 || info.Disks[0].Serial != "E823_8FA6." || *info.Disks[0].TemperatureC != 35 {
+		t.Errorf("disks = %+v", info.Disks)
+	}
+	if len(info.Sensors) != 1 || info.Sensors[0].Value != nil {
+		t.Errorf("sensor before first run = %+v", info.Sensors)
+	}
+
+	p.runSensor(fpsSensor)
+	info = nextGuestUpdate(t, sub)
+	if s := info.Sensors[0]; s.Value == nil || *s.Value != "144" || s.UpdatedAt == nil || s.Error != "" {
+		t.Errorf("sensor = %+v", s)
+	}
+}
+
+func TestVMGuestPoller_VMOffKeepsEntriesWithNullReadings(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	p, sub := testPoller(f, fpsSensor)
+	p.updateAll()
+	nextGuestUpdate(t, sub)
+	p.runSensor(fpsSensor)
+	nextGuestUpdate(t, sub)
+
+	f.states["Windows 11"] = libvirt.DomainShutoff
+	p.updateAll()
+	info := nextGuestUpdate(t, sub)
+	if info.Running || info.AgentConnected || info.Error != "" {
+		t.Errorf("info = %+v", info)
+	}
+	if g := info.GPUs; len(g) != 1 || g[0].Name != "NVIDIA GeForce RTX 4090" || g[0].TemperatureC != nil {
+		t.Errorf("gpus = %+v", g)
+	}
+	if d := info.Disks; len(d) != 1 || d[0].Model == "" || d[0].TemperatureC != nil || d[0].WearPercent != nil {
+		t.Errorf("disks = %+v", d)
+	}
+	if fs := info.Filesystems; len(fs) != 1 || fs[0].Mountpoint != `C:\` || fs[0].TotalBytes != nil {
+		t.Errorf("filesystems = %+v", fs)
+	}
+	if s := info.Sensors[0]; s.Value != nil || s.Error != "" {
+		t.Errorf("sensor = %+v", s)
+	}
+
+	p.runSensor(fpsSensor)
+	if s := nextGuestUpdate(t, sub).Sensors[0]; s.Value != nil || s.Error != "" {
+		t.Errorf("sensor while off = %+v", s)
+	}
+}
+
+func TestVMGuestPoller_AgentDown(t *testing.T) {
+	f := windowsGuest()
+	f.agentDown = true
+	p, sub := testPoller(f, fpsSensor)
+	p.updateAll()
+	info := nextGuestUpdate(t, sub)
+	if !info.Running || info.AgentConnected || info.Error != "guest agent not responding" {
+		t.Errorf("info = %+v", info)
+	}
+	p.runSensor(fpsSensor)
+	if s := nextGuestUpdate(t, sub).Sensors[0]; s.Value != nil || !strings.Contains(s.Error, "not connected") {
+		t.Errorf("sensor = %+v", s)
+	}
+}
+
+func TestVMGuestPoller_LookupErrors(t *testing.T) {
+	f := windowsGuest()
+	delete(f.states, "Windows 11")
+	p, sub := testPoller(f, fpsSensor)
+	p.updateAll()
+	if info := nextGuestUpdate(t, sub); info.Running || !strings.HasPrefix(info.Error, "VM not found") {
+		t.Errorf("info = %+v", info)
+	}
+	p.runSensor(fpsSensor)
+	if s := nextGuestUpdate(t, sub).Sensors[0]; !strings.HasPrefix(s.Error, "VM not found") {
+		t.Errorf("sensor = %+v", s)
+	}
+
+	f = windowsGuest()
+	f.stateErr = errors.New("state failed")
+	p, sub = testPoller(f)
+	p.updateAll()
+	if info := nextGuestUpdate(t, sub); info.Error != "state failed" {
+		t.Errorf("info = %+v", info)
+	}
+}
+
+func TestVMGuestPoller_DialFailure(t *testing.T) {
+	p, sub := testPoller(windowsGuest(), fpsSensor)
+	p.dial = func() (guestConn, error) { return nil, errors.New("no socket") }
+	p.updateAll()
+	if info := nextGuestUpdate(t, sub); info.Error != "libvirt connection failed" {
+		t.Errorf("info = %+v", info)
+	}
+	p.runSensor(fpsSensor)
+	if s := nextGuestUpdate(t, sub).Sensors[0]; s.Error != "libvirt connection failed" {
+		t.Errorf("sensor = %+v", s)
+	}
+}
+
+func TestVMGuestPoller_CommandFailuresClearReadings(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	p, sub := testPoller(f)
+	p.updateAll()
+	nextGuestUpdate(t, sub)
+
+	// fsinfo fails, nvidia-smi exits non-zero, the disk query is not JSON.
+	f.badReply = "guest-get-fsinfo"
+	f.programs[guestNvidiaSMIWindows] = fakeGuestProgram{exitCode: 9, stderr: "NVIDIA-SMI has failed\nmore"}
+	f.programs[guestPowerShell] = fakeGuestProgram{out: "oops"}
+	p.updateAll()
+	info := nextGuestUpdate(t, sub)
+	if !info.AgentConnected || len(info.GPUs) != 1 || info.GPUs[0].TemperatureC != nil {
+		t.Errorf("gpus = %+v", info.GPUs)
+	}
+	if len(info.Disks) != 1 || info.Disks[0].TemperatureC != nil {
+		t.Errorf("disks = %+v", info.Disks)
+	}
+	if len(info.Filesystems) != 1 || info.Filesystems[0].TotalBytes != nil {
+		t.Errorf("filesystems = %+v", info.Filesystems)
+	}
+
+	// The disk query itself fails to start.
+	delete(f.programs, guestPowerShell)
+	p.updateAll()
+	if info := nextGuestUpdate(t, sub); len(info.Disks) != 1 || info.Disks[0].TemperatureC != nil {
+		t.Errorf("disks = %+v", info.Disks)
+	}
+}
+
+func TestVMGuestPoller_LinuxGuest(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.replies["guest-get-osinfo"] = `{"id":"ubuntu","pretty-name":"Ubuntu 24.04"}`
+	f.programs[guestNvidiaSMILinux] = fakeGuestProgram{out: testSMIOut}
+	p, sub := testPoller(f)
+	p.updateAll()
+	info := nextGuestUpdate(t, sub)
+	if len(info.GPUs) != 1 || len(info.Disks) != 0 || info.OSName != "Ubuntu 24.04" {
+		t.Errorf("info = %+v", info)
+	}
+}
+
+func TestGuestExec(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	dom := libvirt.Domain{Name: "Windows 11"}
+
+	f.programs["slow.exe"] = fakeGuestProgram{running: true}
+	if _, err := guestExec(f, dom, "slow.exe", nil); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("slow: err = %v", err)
+	}
+
+	f.programs["fail.exe"] = fakeGuestProgram{exitCode: 1, stderr: strings.Repeat("x", 300)}
+	if _, err := guestExec(f, dom, "fail.exe", nil); err == nil || len(err.Error()) != len("exit code 1: ")+200 {
+		t.Errorf("fail: err = %v", err)
+	}
+
+	f.empty = "guest-exec-status"
+	if _, err := guestExec(f, dom, "fps.exe", nil); err == nil {
+		t.Error("empty status reply: want error")
+	}
+}
+
+func TestAgentCall(t *testing.T) {
+	f := windowsGuest()
+	dom := libvirt.Domain{Name: "Windows 11"}
+	if err := agentCall(f, dom, "x", map[string]any{"bad": func() {}}, nil); err == nil {
+		t.Error("unmarshalable args: want error")
+	}
+	f.empty = "guest-ping"
+	if err := agentCall(f, dom, "guest-ping", nil, nil); err == nil {
+		t.Error("empty reply: want error")
+	}
+	f.badReply = "guest-info"
+	if err := agentCall(f, dom, "guest-info", nil, nil); err == nil {
+		t.Error("bad reply: want error")
+	}
+}
+
+func TestParseNvidiaSMI(t *testing.T) {
+	out := "0, NVIDIA GeForce RTX 4090, 34, 12, 13, 24564, 63.29, [N/A], 2535\n" +
+		"1, Odd, Name, [Not Supported], 0, -1, 100, 10, 20, 30\n" +
+		"short, line\n" +
+		"x, a, 1, 2, 3, 4, 5, 6, 7\n"
+	gpus := parseNvidiaSMI(out)
+	if len(gpus) != 2 {
+		t.Fatalf("got %d GPUs, want 2: %+v", len(gpus), gpus)
+	}
+	if gpus[0].FanPercent != nil || *gpus[0].PowerWatts != 63.29 {
+		t.Errorf("gpu 0 = %+v", gpus[0])
+	}
+	if g := gpus[1]; g.Name != "Odd,Name" || g.TemperatureC != nil || g.MemoryUsedBytes != nil || *g.ClockMHz != 30 {
+		t.Errorf("gpu 1 = %+v", g)
+	}
+}
+
+func TestParseGuestDisks(t *testing.T) {
+	disks, err := parseGuestDisks("")
+	if err != nil || disks == nil || len(disks) != 0 {
+		t.Errorf("empty: %v %v", disks, err)
+	}
+	disks, err = parseGuestDisks(`[{"Model":"A","Temp":0,"TempMax":null,"Wear":0},{"Model":"B","Temp":40}]`)
+	if err != nil || len(disks) != 2 {
+		t.Fatalf("array: %v %v", disks, err)
+	}
+	if d := disks[0]; d.TemperatureC != nil || d.TemperatureMaxC != nil || d.WearPercent == nil || *d.WearPercent != 0 {
+		t.Errorf("disk A = %+v", d)
+	}
+	if _, err := parseGuestDisks("{"); err == nil {
+		t.Error("bad JSON: want error")
+	}
+}
+
+func TestVMGuestPoller_StartStops(t *testing.T) {
+	f := windowsGuest()
+	f.agentDown = true
+	p, sub := testPoller(f, fpsSensor)
+	p.cfg.Interval = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.Start(ctx); close(done) }()
+	nextGuestUpdate(t, sub)
+	nextGuestUpdate(t, sub)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return after cancel")
+	}
+}
+
+func TestVMGuestLoopRecoversAndTicks(t *testing.T) {
+	p, _ := testPoller(windowsGuest())
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	calls := 0
+	done := make(chan struct{})
+	go func() {
+		p.loop(ctx, time.Millisecond, func() {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			if n == 3 {
+				cancel()
+			}
+			panic("boom")
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not stop")
+	}
+}
+
+func TestDialLibvirt(t *testing.T) {
+	conn, err := dialLibvirt()
+	if err == nil {
+		_ = conn.Disconnect()
+	}
+}

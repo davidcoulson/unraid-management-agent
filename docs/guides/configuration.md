@@ -25,6 +25,7 @@ This file is created automatically after the first installation and persists acr
 | `--api-token`                    | -        | Require `Authorization: Bearer <token>` on the HTTP API and `/mcp` (empty = unauthenticated reads, network writes refused)                                             |
 | `--allow-unauthenticated-writes` | `false`  | Allow network writes without an API token (not recommended; `ALLOW_UNAUTHENTICATED_WRITES`)                                                                            |
 | `--wan-ip-lookup`                | `true`   | Ask api.ipify.org, ifconfig.me and icanhazip.com for the WAN IP on request (`WAN_IP_LOOKUP`; `false` uses only Unraid's `WANIP`)                                       |
+| `--vm-guest-agent`               | -        | Comma-separated VMs to read through the QEMU guest agent (`VM_GUEST_AGENT`); see [VM guest agent](#vm-guest-agent)                                                     |
 | `--mcp-connect-secret`           | -        | Optional 32–256 char (`[A-Za-z0-9_-]`) secret enabling header-free MCP onboarding at `/mcp/<secret>` (`MCP_CONNECT_SECRET`)                                            |
 | `--debug`                        | `false`  | Enable debug logging                                                                                                                                                   |
 | `--mqtt-enabled`                 | `false`  | Enable MQTT publishing                                                                                                                                                 |
@@ -337,6 +338,52 @@ Topics will be:
 ```bash
 MQTT_BROKER=ssl://mqtt.example.com:8883
 ```
+
+## VM Guest Agent
+
+The agent can read data from inside VMs through the QEMU guest agent, so a VM
+needs no monitoring software of its own (such as LibreHardwareMonitor).
+Each listed VM needs the guest agent installed and running
+(`qemu-guest-agent` on Linux, the virtio-win guest tools on Windows).
+
+Every `interval` seconds (default 30, minimum 10) the agent reads:
+
+- host name, OS name and filesystem usage
+- NVIDIA GPUs with `nvidia-smi`: temperature, utilization, memory, power, fan and clock
+- on Windows, physical disks with `Get-StorageReliabilityCounter`: temperature, maximum
+  temperature and wear
+
+Custom sensors run a command inside the VM on their own interval (default 30, minimum
+5 seconds); the trimmed standard output becomes the sensor value. Commands run without
+a shell, as SYSTEM on Windows or root on Linux, and time out after 30 seconds.
+
+Results are at `GET /api/v1/vm/guest` and in the `vm_guest_update` WebSocket event.
+While a VM is off, or its guest agent is not answering, its GPUs, disks, filesystems
+and sensors stay listed with `null` readings, so Home Assistant shows them as unknown
+rather than unavailable.
+
+Configure it in `config.yml`:
+
+```yaml
+vm_guest_agent:
+  vms: ["Windows 11"]
+  interval: 30
+  sensors:
+    - vm: "Windows 11"
+      name: fps # 1-64 lowercase letters, digits or underscores
+      interval: 5
+      command:
+        - C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        - -NoProfile
+        - -ExecutionPolicy
+        - Bypass
+        - -File
+        - C:\ProgramData\Scripts\fps.ps1
+```
+
+`--vm-guest-agent` / `VM_GUEST_AGENT` (comma-separated VM names) replaces the `vms`
+list; custom sensors are set only in `config.yml`, and a sensor whose VM is not in
+the list is skipped.
 
 ## Auto-Discovery (zeroconf/mDNS)
 

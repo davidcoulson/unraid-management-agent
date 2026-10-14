@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VM guest agent readings** — VMs listed under `vm_guest_agent` in `config.yml` (or
+  `--vm-guest-agent` / `VM_GUEST_AGENT`) are read through the QEMU guest agent: host name, OS,
+  filesystem usage, NVIDIA GPU readings from `nvidia-smi` and, on Windows, disk temperature and
+  wear from `Get-StorageReliabilityCounter`. Custom sensors run a command inside the VM on their
+  own interval and report its output. Served at `GET /api/v1/vm/guest` and in the new
+  `vm_guest_update` WebSocket event. While a VM is off its GPUs, disks and sensors stay listed with
+  `null` readings, so consumers can show them as unknown rather than unavailable.
 - **UPS telemetry: voltages, frequency, temperature, transfers and self-test** — `/api/v1/ups`
   (and the `ups_status_update` event) now reports `input_voltage`, `output_voltage`,
   `battery_voltage`, `line_frequency`, `temperature_celsius`, `time_on_battery_seconds`,

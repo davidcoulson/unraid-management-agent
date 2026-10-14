@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -83,6 +84,10 @@ var cli struct {
 	// WANIPLookup asks external IP services for the WAN IP when network access
 	// URLs are requested (#252).
 	WANIPLookup bool `name:"wan-ip-lookup" default:"true" env:"WAN_IP_LOOKUP" help:"ask api.ipify.org, ifconfig.me and icanhazip.com for the WAN IP when network access URLs are requested (false: use only Unraid's configured WANIP)"`
+
+	// VMGuestAgent lists VMs to read through the QEMU guest agent (GPU, disk
+	// and filesystem stats, custom sensors).
+	VMGuestAgent string `name:"vm-guest-agent" default:"" env:"VM_GUEST_AGENT" help:"comma-separated VM names to read through the QEMU guest agent (GPU, disk and filesystem stats); overrides vm_guest_agent.vms in config.yml"`
 
 	// MCPConnectSecret enables an optional secret-bearing MCP path (/mcp/<secret>)
 	// for URL-only MCP clients (ha-mcp style onboarding) without exposing full REST API access.
@@ -381,6 +386,7 @@ func main() {
 		TLSCertFile:      cli.TLSCertFile,
 		TLSKeyFile:       cli.TLSKeyFile,
 		ToolPolicy:       toolPolicy,
+		VMGuest:          buildVMGuestConfig(cli.VMGuestAgent, vmGuestFileConfig(fileCfg)),
 		Hub:              domain.NewEventBus(1024), // Buffer size for event bus
 		Platform:         platform.NewRegistry(),
 		MQTTConfig: domain.MQTTConfig{
@@ -549,6 +555,85 @@ func isExplicitFlag(dst any) bool {
 // values are applied after kong.Parse to fill in non-defaulted values.
 // In practice this means file config acts as a "second default layer":
 // CLI flag > env var > config file > struct default.
+// Limits for the vm_guest_agent settings.
+const (
+	vmGuestDefaultInterval = 30
+	vmGuestMinInterval     = 10
+	vmGuestMinSensorSecs   = 5
+)
+
+var vmGuestSensorNameRegex = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// vmGuestFileConfig returns the vm_guest_agent section of config.yml, or nil.
+func vmGuestFileConfig(cfg *domain.FileConfig) *domain.FileConfigVMGuest {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.VMGuestAgent
+}
+
+// buildVMGuestConfig merges the --vm-guest-agent flag with the vm_guest_agent
+// section of config.yml. The flag, when set, replaces the file's VM list.
+// Invalid VM names and sensors are logged and skipped.
+func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VMGuestConfig {
+	cfg := domain.VMGuestConfig{Interval: vmGuestDefaultInterval}
+	var names []string
+	if file != nil {
+		names = file.VMs
+		if file.Interval != nil {
+			cfg.Interval = max(*file.Interval, vmGuestMinInterval)
+		}
+	}
+	if cliVMs != "" {
+		names = strings.Split(cliVMs, ",")
+	}
+
+	known := make(map[string]bool)
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || known[name] {
+			continue
+		}
+		if err := lib.ValidateVMName(name); err != nil {
+			logger.Warning("vm_guest_agent: skipping VM %q: %v", name, err)
+			continue
+		}
+		known[name] = true
+		cfg.VMs = append(cfg.VMs, name)
+	}
+	if file == nil {
+		return cfg
+	}
+
+	seen := make(map[string]bool)
+	for _, s := range file.Sensors {
+		key := s.VM + "/" + s.Name
+		switch {
+		case !known[s.VM]:
+			logger.Warning("vm_guest_agent: skipping sensor %q: VM %q is not in the VM list", s.Name, s.VM)
+		case !vmGuestSensorNameRegex.MatchString(s.Name):
+			logger.Warning("vm_guest_agent: skipping sensor %q: name must be 1-64 lowercase letters, digits or underscores", s.Name)
+		case seen[key]:
+			logger.Warning("vm_guest_agent: skipping duplicate sensor %q for VM %q", s.Name, s.VM)
+		case len(s.Command) == 0 || s.Command[0] == "":
+			logger.Warning("vm_guest_agent: skipping sensor %q: command is empty", s.Name)
+		default:
+			seen[key] = true
+			interval := s.Interval
+			if interval == 0 {
+				interval = vmGuestDefaultInterval
+			}
+			cfg.Sensors = append(cfg.Sensors, domain.VMGuestSensorConfig{
+				VM:       s.VM,
+				Name:     s.Name,
+				Command:  s.Command,
+				Interval: max(interval, vmGuestMinSensorSecs),
+			})
+		}
+	}
+	return cfg
+}
+
 func applyFileConfig(cfg *domain.FileConfig) {
 	if cfg == nil {
 		return
