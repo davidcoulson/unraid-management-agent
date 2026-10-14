@@ -145,10 +145,13 @@ type vmGuestPoller struct {
 	// jsonNames holds the sensor names expanded from each JSON sensor's
 	// output, by VM and sensor, so they stay listed when a run fails.
 	jsonNames map[string][]string
+	// jsonFailing marks the JSON sensors whose last run failed, by VM and
+	// sensor, so a failure is logged once rather than on every run.
+	jsonFailing map[string]bool
 }
 
 func newVMGuestPoller(cfg domain.VMGuestConfig, hub *domain.EventBus) *vmGuestPoller {
-	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo), pending: make(map[string]int), jsonNames: make(map[string][]string)}
+	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo), pending: make(map[string]int), jsonNames: make(map[string][]string), jsonFailing: make(map[string]bool)}
 	for _, vm := range cfg.VMs {
 		p.infos[vm] = &dto.VMGuestInfo{
 			VMName:      vm,
@@ -421,7 +424,6 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 		var err error
 		if fresh, err = expandJSONSensor(s.Name, *out, reserved); err != nil {
 			errMsg = err.Error()
-			logger.Debug("VM guest agent: %s: sensor %s: %v", s.VM, s.Name, err)
 		} else {
 			names := make([]string, len(fresh))
 			for i, v := range fresh {
@@ -429,6 +431,16 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 			}
 			p.jsonNames[key] = names
 		}
+	}
+	// A JSON sensor has no entry until its first good run, so a failure
+	// before that is only visible in the log.
+	if failing := errMsg != ""; out != nil || failing {
+		if failing && !p.jsonFailing[key] {
+			logger.Warning("VM guest agent: %s: sensor %s: %s", s.VM, s.Name, errMsg)
+		} else if !failing && p.jsonFailing[key] {
+			logger.Info("VM guest agent: %s: sensor %s: recovered", s.VM, s.Name)
+		}
+		p.jsonFailing[key] = failing
 	}
 	for _, v := range fresh {
 		old[v.name] = dto.VMGuestSensor{Name: v.name, Value: v.value, UpdatedAt: &now}

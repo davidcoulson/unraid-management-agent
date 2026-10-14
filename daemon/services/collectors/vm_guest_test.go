@@ -874,3 +874,24 @@ func TestVMGuestPoller_JSONSensorNamesNotShared(t *testing.T) {
 		}
 	}
 }
+
+func TestVMGuestPoller_JSONSensorFailsBeforeFirstGoodRun(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `oops`}
+	p, sub := testPoller(f, framesSensor)
+	for range 2 {
+		p.runSensor(context.Background(), framesSensor)
+		if info := nextGuestUpdate(t, sub); len(info.Sensors) != 0 {
+			t.Errorf("sensors = %+v, want none", info.Sensors)
+		}
+	}
+	if !p.jsonFailing["Windows 11/frames"] {
+		t.Error("failure not recorded")
+	}
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":1}`}
+	p.runSensor(context.Background(), framesSensor)
+	if got := sensorNames(nextGuestUpdate(t, sub).Sensors); got != "frames_avg" || p.jsonFailing["Windows 11/frames"] {
+		t.Errorf("after recovery: sensors = %s, failing = %v", got, p.jsonFailing["Windows 11/frames"])
+	}
+}
