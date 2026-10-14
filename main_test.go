@@ -179,6 +179,8 @@ func TestBuildVMGuestConfig(t *testing.T) {
 				{VM: "Windows 11", Name: "fps", Command: ps, Interval: 1},
 				{VM: "Windows 11", Name: "game", Command: ps, JSON: true},
 				{VM: "Windows 11", Name: "fps", Command: ps},
+				{VM: "Windows 11", Name: "game_score", Command: ps},
+				{VM: "Windows 11", Name: "gamer", Command: ps},
 				{VM: "Other", Name: "x", Command: ps},
 				{VM: "Windows 11", Name: "Bad Name", Command: ps},
 				{VM: "Windows 11", Name: "empty"},
@@ -191,6 +193,7 @@ func TestBuildVMGuestConfig(t *testing.T) {
 		want := []domain.VMGuestSensorConfig{
 			{VM: "Windows 11", Name: "fps", Command: ps, Interval: vmGuestMinSensorSecs},
 			{VM: "Windows 11", Name: "game", Command: ps, Interval: vmGuestDefaultInterval, JSON: true},
+			{VM: "Windows 11", Name: "gamer", Command: ps, Interval: vmGuestDefaultInterval},
 		}
 		if !reflect.DeepEqual(got.Sensors, want) {
 			t.Errorf("Sensors = %+v, want %+v", got.Sensors, want)

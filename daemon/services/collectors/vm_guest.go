@@ -457,6 +457,41 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 	p.infos[s.VM].Sensors = list
 }
 
+// plainDecimal writes a JSON number literal in plain decimal notation without
+// rounding it: no exponent and no trailing zeros in the fraction. It reports
+// false for an exponent beyond +-400.
+func plainDecimal(lit string) (string, bool) {
+	neg := strings.HasPrefix(lit, "-")
+	mant, expStr, _ := strings.Cut(strings.ToLower(strings.TrimPrefix(lit, "-")), "e")
+	exp := 0
+	if expStr != "" {
+		var err error
+		if exp, err = strconv.Atoi(expStr); err != nil || exp > 400 || exp < -400 {
+			return "", false
+		}
+	}
+	intDigits, fracDigits, _ := strings.Cut(mant, ".")
+	digits := intDigits + fracDigits
+	point := len(intDigits) + exp
+	if point < 0 {
+		digits = strings.Repeat("0", -point) + digits
+		point = 0
+	} else if point > len(digits) {
+		digits += strings.Repeat("0", point-len(digits))
+	}
+	res := strings.TrimLeft(digits[:point], "0")
+	if res == "" {
+		res = "0"
+	}
+	if frac := strings.TrimRight(digits[point:], "0"); frac != "" {
+		res += "." + frac
+	}
+	if neg && res != "0" {
+		res = "-" + res
+	}
+	return res, true
+}
+
 // jsonSensorValue is one key of a JSON sensor's output.
 type jsonSensorValue struct {
 	name  string
@@ -507,13 +542,12 @@ func expandJSONSensor(name, out string, reserved map[string]bool) ([]jsonSensorV
 		switch v := obj[k].(type) {
 		case nil:
 		case json.Number:
-			f, err := v.Float64()
-			if err != nil {
-				logger.Debug("VM guest agent: sensor %s: skipping key %q: %v", name, k, err)
+			plain, ok := plainDecimal(v.String())
+			if !ok {
+				logger.Debug("VM guest agent: sensor %s: skipping key %q: number %q out of range", name, k, v)
 				continue
 			}
-			s := strconv.FormatFloat(f, 'f', -1, 64)
-			value = &s
+			value = &plain
 		case string:
 			value = &v
 		case bool:

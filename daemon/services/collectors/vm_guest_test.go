@@ -624,10 +624,13 @@ func TestExpandJSONSensor(t *testing.T) {
 		},
 		{
 			name: "numbers without exponent noise",
-			out:  `{"a":1e3,"b":0.5,"c":-2,"d":1.50,"e":12345678901234567890}`,
+			out:  `{"a":1e3,"b":0.5,"c":-2,"d":1.50,"e":12345678901234567890,"f":9007199254740993,"g":1.5E-3,"h":-1.25e1,"i":2e+2,"j":-0,"k":0.000,"l":123.456e-2,"m":1e-3}`,
 			want: []jsonSensorValue{
 				{"frames_a", strp("1000")}, {"frames_b", strp("0.5")}, {"frames_c", strp("-2")},
-				{"frames_d", strp("1.5")}, {"frames_e", strp("12345678901234567000")},
+				{"frames_d", strp("1.5")}, {"frames_e", strp("12345678901234567890")},
+				{"frames_f", strp("9007199254740993")}, {"frames_g", strp("0.0015")}, {"frames_h", strp("-12.5")},
+				{"frames_i", strp("200")}, {"frames_j", strp("0")}, {"frames_k", strp("0")},
+				{"frames_l", strp("1.23456")}, {"frames_m", strp("0.001")},
 			},
 		},
 		{
@@ -644,7 +647,7 @@ func TestExpandJSONSensor(t *testing.T) {
 		},
 		{
 			name: "number out of range skipped",
-			out:  `{"big":1e999,"ok":1}`,
+			out:  `{"big":1e999,"small":1e-999,"huge":1e99999999999999999999,"ok":1}`,
 			want: []jsonSensorValue{{"frames_ok", strp("1")}},
 		},
 		{

@@ -632,7 +632,27 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 			})
 		}
 	}
+	cfg.Sensors = dropAmbiguousJSONSensors(cfg.Sensors)
 	return cfg
+}
+
+// dropAmbiguousJSONSensors skips a sensor whose name starts with the name of a
+// JSON sensor on the same VM followed by an underscore. The JSON sensor's keys
+// could produce the same name (gpu with key core_temp, gpu_core with key temp),
+// and which sensor owned it would depend on which command finished first.
+func dropAmbiguousJSONSensors(sensors []domain.VMGuestSensorConfig) []domain.VMGuestSensorConfig {
+	kept := sensors[:0:0]
+outer:
+	for _, s := range sensors {
+		for _, j := range sensors {
+			if j.JSON && j.VM == s.VM && strings.HasPrefix(s.Name, j.Name+"_") {
+				logger.Warning("vm_guest_agent: skipping sensor %q: its name starts with JSON sensor %q and an underscore, so their names could clash", s.Name, j.Name)
+				continue outer
+			}
+		}
+		kept = append(kept, s)
+	}
+	return kept
 }
 
 func applyFileConfig(cfg *domain.FileConfig) {
