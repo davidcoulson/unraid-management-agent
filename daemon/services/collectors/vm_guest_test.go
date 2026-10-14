@@ -285,6 +285,28 @@ func TestVMGuestPoller_DialFailure(t *testing.T) {
 	}
 }
 
+func TestVMGuestPoller_ConnectionPerVM(t *testing.T) {
+	f := windowsGuest()
+	f.states["Other"] = libvirt.DomainShutoff
+	hub := domain.NewEventBus(10)
+	sub := hub.Sub("vm_guest_update")
+	p := newVMGuestPoller(domain.VMGuestConfig{VMs: []string{"Other", "Windows 11"}, Interval: 30}, hub)
+	dials := 0
+	p.dial = func(context.Context) (guestConn, error) {
+		dials++
+		if dials == 1 {
+			return nil, errors.New("no socket")
+		}
+		return f, nil
+	}
+	fastGuestExec(t)
+	p.updateAll(context.Background())
+	infos := (<-sub).([]*dto.VMGuestInfo)
+	if dials != 2 || infos[0].Error != "libvirt connection failed" || !infos[1].AgentConnected {
+		t.Errorf("dials = %d, infos = %+v, %+v", dials, infos[0], infos[1])
+	}
+}
+
 func TestVMGuestPoller_CommandFailuresClearReadings(t *testing.T) {
 	fastGuestExec(t)
 	f := windowsGuest()

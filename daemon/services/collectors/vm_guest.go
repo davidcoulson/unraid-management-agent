@@ -215,20 +215,18 @@ func (p *vmGuestPoller) publish() {
 	domain.Publish(p.hub, constants.TopicVMGuestUpdate, out)
 }
 
-// updateAll runs the full update for every VM and publishes once.
+// updateAll runs the full update for every VM and publishes once. Each VM
+// gets its own connection, so a slow VM cannot use up another's time limit.
 func (p *vmGuestPoller) updateAll(ctx context.Context) {
-	conn, err := p.dial(ctx)
-	if err != nil {
-		logger.Debug("VM guest agent: libvirt connection failed: %v", err)
-		for _, vm := range p.cfg.VMs {
-			p.setOffline(vm, false, "libvirt connection failed")
-		}
-		p.publish()
-		return
-	}
-	defer conn.Disconnect() //nolint:errcheck
 	for _, vm := range p.cfg.VMs {
+		conn, err := p.dial(ctx)
+		if err != nil {
+			logger.Debug("VM guest agent: libvirt connection failed: %v", err)
+			p.setOffline(vm, false, "libvirt connection failed")
+			continue
+		}
 		p.updateVM(conn, vm)
+		_ = conn.Disconnect()
 	}
 	p.publish()
 }
