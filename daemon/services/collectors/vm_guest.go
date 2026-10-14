@@ -335,6 +335,19 @@ func (p *vmGuestPoller) updateVM(conn guestConn, vm string) {
 	}
 }
 
+// nilAttributes returns a new map with the keys of attributes and nil values,
+// so a map already published in a snapshot is not changed.
+func nilAttributes(attributes map[string]*string) map[string]*string {
+	if attributes == nil {
+		return nil
+	}
+	attrs := make(map[string]*string, len(attributes))
+	for k := range attributes {
+		attrs[k] = nil
+	}
+	return attrs
+}
+
 // setOffline keeps the VM's GPUs, disks, filesystems and sensors with every
 // reading set to null.
 func (p *vmGuestPoller) setOffline(vm string, running bool, msg string) {
@@ -351,6 +364,7 @@ func (p *vmGuestPoller) setOffline(vm string, running bool, msg string) {
 	for i := range info.Sensors {
 		info.Sensors[i].Value = nil
 		info.Sensors[i].Error = ""
+		info.Sensors[i].Attributes = nilAttributes(info.Sensors[i].Attributes)
 	}
 }
 
@@ -422,7 +436,7 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 			}
 		}
 		var err error
-		if fresh, err = expandJSONSensor(s.Name, *out, reserved, normalizedAttributes(s.Attributes)); err != nil {
+		if fresh, err = expandJSONSensor(s.Name, *out, reserved, s.Attributes); err != nil {
 			errMsg = err.Error()
 		} else {
 			names := make([]string, len(fresh))
@@ -449,13 +463,7 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 		if out == nil || errMsg != "" {
 			sensor := old[name]
 			sensor.Value, sensor.Error = nil, errMsg
-			if sensor.Attributes != nil {
-				attrs := make(map[string]*string, len(sensor.Attributes))
-				for k := range sensor.Attributes {
-					attrs[k] = nil
-				}
-				sensor.Attributes = attrs
-			}
+			sensor.Attributes = nilAttributes(sensor.Attributes)
 			old[name] = sensor
 		}
 	}
@@ -521,19 +529,6 @@ type jsonSensorValue struct {
 var vmGuestSensorNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 
 var jsonSensorKeyRegex = regexp.MustCompile(`[^a-z0-9_]`)
-
-// normalizedAttributes applies the key normalisation of expandJSONSensor to
-// both sides of a sensor's attributes map.
-func normalizedAttributes(attributes map[string]string) map[string]string {
-	if len(attributes) == 0 {
-		return nil
-	}
-	norm := make(map[string]string, len(attributes))
-	for k, v := range attributes {
-		norm[jsonSensorKeyRegex.ReplaceAllString(strings.ToLower(k), "_")] = jsonSensorKeyRegex.ReplaceAllString(strings.ToLower(v), "_")
-	}
-	return norm
-}
 
 // expandJSONSensor turns a flat JSON object into one value per key, named
 // <name>_<key> and sorted by key. Keys are lowercased and any other character

@@ -562,6 +562,8 @@ const (
 	vmGuestMinSensorSecs   = 5
 )
 
+var vmGuestKeyRegex = regexp.MustCompile(`[^a-z0-9_]`)
+
 var vmGuestSensorNameRegex = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 
 // vmGuestFileConfig returns the vm_guest_agent section of config.yml, or nil.
@@ -619,10 +621,11 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 			logger.Warning("vm_guest_agent: skipping sensor %q: command is empty", s.Name)
 		case len(s.Attributes) > 0 && !s.JSON:
 			logger.Warning("vm_guest_agent: skipping sensor %q: attributes need json: true", s.Name)
-		case !validSensorAttributes(s.Attributes):
-			logger.Warning("vm_guest_agent: skipping sensor %q: attributes must map non-empty keys to other keys that are not attributes themselves", s.Name)
+		case !validAttributes(s.Attributes):
+			logger.Warning("vm_guest_agent: skipping sensor %q: attributes must map distinct non-empty keys to other keys that are not attributes themselves", s.Name)
 		default:
 			seen[key] = true
+			attributes, _ := normalizeSensorAttributes(s.Attributes)
 			interval := s.Interval
 			if interval == 0 {
 				interval = vmGuestDefaultInterval
@@ -633,7 +636,7 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 				Command:    s.Command,
 				Interval:   max(interval, vmGuestMinSensorSecs),
 				JSON:       s.JSON,
-				Attributes: s.Attributes,
+				Attributes: attributes,
 			})
 		}
 	}
@@ -641,18 +644,36 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 	return cfg
 }
 
-// validSensorAttributes reports whether every attribute key and target is
-// non-empty and no target is itself an attribute key.
-func validSensorAttributes(attributes map[string]string) bool {
+func validAttributes(attributes map[string]string) bool {
+	_, ok := normalizeSensorAttributes(attributes)
+	return ok
+}
+
+// normalizeSensorAttributes normalises attribute keys and targets the way
+// expandJSONSensor normalises JSON keys (lowercase, other characters to an
+// underscore). It reports false for an empty name, two keys that normalise to
+// the same name, or a target that is itself an attribute key.
+func normalizeSensorAttributes(attributes map[string]string) (map[string]string, bool) {
+	if len(attributes) == 0 {
+		return nil, true
+	}
+	norm := make(map[string]string, len(attributes))
 	for k, target := range attributes {
 		if strings.TrimSpace(k) == "" || strings.TrimSpace(target) == "" {
-			return false
+			return nil, false
 		}
-		if _, isAttr := attributes[target]; isAttr {
-			return false
+		nk := vmGuestKeyRegex.ReplaceAllString(strings.ToLower(k), "_")
+		if _, dup := norm[nk]; dup {
+			return nil, false
+		}
+		norm[nk] = vmGuestKeyRegex.ReplaceAllString(strings.ToLower(target), "_")
+	}
+	for _, target := range norm {
+		if _, isAttr := norm[target]; isAttr {
+			return nil, false
 		}
 	}
-	return true
+	return norm, true
 }
 
 // dropAmbiguousJSONSensors skips a sensor whose name starts with the name of a

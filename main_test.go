@@ -207,6 +207,27 @@ func TestBuildVMGuestConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("attributes are normalised and collisions rejected", func(t *testing.T) {
+		mk := func(name string, attrs map[string]string) domain.FileConfigVMGuestSensor {
+			return domain.FileConfigVMGuestSensor{VM: "Windows 11", Name: name, Command: ps, JSON: true, Attributes: attrs}
+		}
+		got := buildVMGuestConfig("", &domain.FileConfigVMGuest{
+			VMs: []string{"Windows 11"},
+			Sensors: []domain.FileConfigVMGuestSensor{
+				mk("ok", map[string]string{"Graph-X": "AVG"}),
+				mk("casedup", map[string]string{"Graph": "avg", "graph": "avg"}),
+				mk("punctdup", map[string]string{"a-b": "avg", "a_b": "avg"}),
+				mk("targetattr", map[string]string{"Avg": "x", "a": "AVG"}),
+			},
+		})
+		want := []domain.VMGuestSensorConfig{
+			{VM: "Windows 11", Name: "ok", Command: ps, Interval: vmGuestDefaultInterval, JSON: true, Attributes: map[string]string{"graph_x": "avg"}},
+		}
+		if !reflect.DeepEqual(got.Sensors, want) {
+			t.Errorf("Sensors = %+v, want %+v", got.Sensors, want)
+		}
+	})
+
 	t.Run("flag replaces file VMs", func(t *testing.T) {
 		got := buildVMGuestConfig("ubuntu", &domain.FileConfigVMGuest{
 			VMs:      []string{"Windows 11"},

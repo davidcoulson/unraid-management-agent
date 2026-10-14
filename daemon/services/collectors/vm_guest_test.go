@@ -767,16 +767,6 @@ func TestVMGuestPoller_JSONSensor(t *testing.T) {
 	}
 }
 
-func TestNormalizedAttributes(t *testing.T) {
-	if normalizedAttributes(nil) != nil {
-		t.Error("want nil for no attributes")
-	}
-	got := normalizedAttributes(map[string]string{"Low 5%": "AVG"})
-	if !reflect.DeepEqual(got, map[string]string{"low_5_": "avg"}) {
-		t.Errorf("got %v", got)
-	}
-}
-
 func TestVMGuestPoller_JSONSensorAttributes(t *testing.T) {
 	fastGuestExec(t)
 	f := windowsGuest()
@@ -800,6 +790,27 @@ func TestVMGuestPoller_JSONSensorAttributes(t *testing.T) {
 	info = nextGuestUpdate(t, sub)
 	if a, ok := info.Sensors[0].Attributes["graph"]; !ok || a != nil || info.Sensors[0].Value != nil {
 		t.Errorf("sensor = %+v", info.Sensors[0])
+	}
+}
+
+func TestVMGuestPoller_JSONSensorAttributesVMOff(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":98.4,"graph":"82|10"}`}
+	s := framesSensor
+	s.Attributes = map[string]string{"graph": "avg"}
+	p, sub := testPoller(f, s)
+	p.runSensor(context.Background(), s)
+	before := nextGuestUpdate(t, sub)
+
+	f.states["Windows 11"] = libvirt.DomainShutoff
+	p.updateAll(context.Background())
+	after := nextGuestUpdate(t, sub)
+	if a, ok := after.Sensors[0].Attributes["graph"]; !ok || a != nil {
+		t.Errorf("attributes after shutdown = %v", after.Sensors[0].Attributes)
+	}
+	if a := before.Sensors[0].Attributes["graph"]; a == nil || *a != "82|10" {
+		t.Errorf("earlier snapshot changed: %v", before.Sensors[0].Attributes)
 	}
 }
 
