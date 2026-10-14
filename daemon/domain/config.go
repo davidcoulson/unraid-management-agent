@@ -96,6 +96,9 @@ type VMGuestSensorConfig struct {
 	Name     string   `json:"name"`
 	Command  []string `json:"command"`
 	Interval int      `json:"interval"`
+	// JSON expands a flat JSON object on standard output into one sensor per
+	// key, named <Name>_<key>.
+	JSON bool `json:"json,omitempty"`
 }
 
 // ToolPolicyValue defines the access policy for an individual MCP tool.

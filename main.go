@@ -628,6 +628,7 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 				Name:     s.Name,
 				Command:  s.Command,
 				Interval: max(interval, vmGuestMinSensorSecs),
+				JSON:     s.JSON,
 			})
 		}
 	}

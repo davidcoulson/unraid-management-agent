@@ -357,6 +357,14 @@ Custom sensors run a command inside the VM on their own interval (default 30, mi
 5 seconds); the trimmed standard output becomes the sensor value. Commands run without
 a shell, as SYSTEM on Windows or root on Linux, and time out after 30 seconds.
 
+A sensor with `json: true` must print a flat JSON object. Each key becomes its own sensor
+named `<name>_<key>`: the key is lowercased, any character other than a letter, digit or
+underscore becomes `_`, and the result must still be 1-64 characters (otherwise that key is
+skipped with a log message). Numbers are written in plain decimal (`98.4`, `82`), strings
+as they are, booleans as `true`/`false` and `null` as a `null` value; nested objects and
+arrays are skipped. Sensors are listed in config order, then keys sorted. Output that is not
+a JSON object counts as a failed run: the keys seen so far stay listed with `null` values.
+
 Results are at `GET /api/v1/vm/guest` and in the `vm_guest_update` WebSocket event.
 While a VM is off, or its guest agent is not answering, its GPUs, disks, filesystems
 and sensors stay listed with `null` readings, so Home Assistant shows them as unknown
@@ -379,6 +387,17 @@ vm_guest_agent:
         - Bypass
         - -File
         - C:\ProgramData\Scripts\fps.ps1
+    # frames.ps1 prints {"avg":98.4,"low5":91,"low1":82} -> sensors frames_avg,
+    # frames_low5 and frames_low1
+    - vm: "Windows 11"
+      name: frames
+      json: true
+      interval: 5
+      command:
+        - C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        - -NoProfile
+        - -File
+        - C:\ProgramData\Scripts\frames.ps1
 ```
 
 `--vm-guest-agent` / `VM_GUEST_AGENT` (comma-separated VM names) replaces the `vms`

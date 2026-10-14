@@ -55,7 +55,8 @@ type VMGuestDisk struct {
 
 // VMGuestSensor is the output of a custom command configured to run inside the
 // guest. Value is the trimmed standard output, or null when the VM is off or
-// the last run failed.
+// the last run failed. A sensor configured with json: true is listed once per
+// key of the JSON object its command prints, named <name>_<key>.
 type VMGuestSensor struct {
 	Name      string     `json:"name" example:"fps"`
 	Value     *string    `json:"value" example:"144"`

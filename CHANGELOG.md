@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wear from `Get-StorageReliabilityCounter`. Custom sensors run a command inside the VM on their
   own interval and report its output. Served at `GET /api/v1/vm/guest` and in the new
   `vm_guest_update` WebSocket event. While a VM is off its GPUs, disks and sensors stay listed with
-  `null` readings, so consumers can show them as unknown rather than unavailable.
+  `null` readings, so consumers can show them as unknown rather than unavailable. A custom sensor
+  with `json: true` expands a flat JSON object printed by its command into one sensor per key,
+  named `<name>_<key>` (for example `frames_avg`); output that is not a JSON object counts as a
+  failed run and the known keys stay listed with `null` values.
 - **UPS telemetry: voltages, frequency, temperature, transfers and self-test** — `/api/v1/ups`
   (and the `ups_status_update` event) now reports `input_voltage`, `output_voltage`,
   `battery_voltage`, `line_frequency`, `temperature_celsius`, `time_on_battery_seconds`,

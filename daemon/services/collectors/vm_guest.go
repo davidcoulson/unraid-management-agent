@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,10 +142,13 @@ type vmGuestPoller struct {
 	// pending holds the guest PID of a command that has not finished, by
 	// VM and command, so it is not started again until it is reaped.
 	pending map[string]int
+	// jsonNames holds the sensor names expanded from each JSON sensor's
+	// output, by VM and sensor, so they stay listed when a run fails.
+	jsonNames map[string][]string
 }
 
 func newVMGuestPoller(cfg domain.VMGuestConfig, hub *domain.EventBus) *vmGuestPoller {
-	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo), pending: make(map[string]int)}
+	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo), pending: make(map[string]int), jsonNames: make(map[string][]string)}
 	for _, vm := range cfg.VMs {
 		p.infos[vm] = &dto.VMGuestInfo{
 			VMName:      vm,
@@ -153,6 +159,9 @@ func newVMGuestPoller(cfg domain.VMGuestConfig, hub *domain.EventBus) *vmGuestPo
 		}
 	}
 	for _, s := range cfg.Sensors {
+		if s.JSON {
+			continue
+		}
 		info := p.infos[s.VM]
 		info.Sensors = append(info.Sensors, dto.VMGuestSensor{Name: s.Name})
 	}
@@ -344,7 +353,7 @@ func (p *vmGuestPoller) setOffline(vm string, running bool, msg string) {
 
 // runSensor runs one custom sensor command and publishes the result.
 func (p *vmGuestPoller) runSensor(ctx context.Context, s domain.VMGuestSensorConfig) {
-	var value *string
+	var out *string
 	errMsg := ""
 	conn, err := p.dial(ctx)
 	if err != nil {
@@ -356,31 +365,165 @@ func (p *vmGuestPoller) runSensor(ctx context.Context, s domain.VMGuestSensorCon
 		case err != nil:
 			errMsg = err.Error()
 		case running:
-			out, err := p.exec(conn, dom, s.VM+"/sensor/"+s.Name, s.Command[0], s.Command[1:])
+			raw, err := p.exec(conn, dom, s.VM+"/sensor/"+s.Name, s.Command[0], s.Command[1:])
 			if err != nil {
 				errMsg = err.Error()
 				logger.Debug("VM guest agent: %s: sensor %s: %v", s.VM, s.Name, err)
 			} else {
-				v := strings.TrimSpace(out)
-				value = &v
+				v := strings.TrimSpace(raw)
+				out = &v
 			}
 		}
 	}
 
 	now := time.Now()
 	p.mu.Lock()
-	for i := range p.infos[s.VM].Sensors {
-		sensor := &p.infos[s.VM].Sensors[i]
-		if sensor.Name == s.Name {
-			sensor.Value = value
-			sensor.Error = errMsg
-			if value != nil {
-				sensor.UpdatedAt = &now
+	if s.JSON {
+		p.setJSONSensors(s, out, errMsg, now)
+	} else {
+		for i := range p.infos[s.VM].Sensors {
+			sensor := &p.infos[s.VM].Sensors[i]
+			if sensor.Name == s.Name {
+				sensor.Value = out
+				sensor.Error = errMsg
+				if out != nil {
+					sensor.UpdatedAt = &now
+				}
 			}
 		}
 	}
 	p.mu.Unlock()
 	p.publish()
+}
+
+// setJSONSensors stores the result of a JSON sensor run and rebuilds the VM's
+// sensor list in config order, with each JSON sensor's keys sorted. A run that
+// failed, or whose output is not a flat JSON object, sets every key seen so
+// far to null. The caller holds p.mu.
+func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string, errMsg string, now time.Time) {
+	key := s.VM + "/" + s.Name
+	old := make(map[string]dto.VMGuestSensor)
+	for _, sensor := range p.infos[s.VM].Sensors {
+		old[sensor.Name] = sensor
+	}
+
+	var fresh []jsonSensorValue
+	if out != nil {
+		reserved := make(map[string]bool)
+		for _, c := range p.cfg.Sensors {
+			if c.VM == s.VM && c.Name != s.Name {
+				reserved[c.Name] = true
+			}
+		}
+		var err error
+		if fresh, err = expandJSONSensor(s.Name, *out, reserved); err != nil {
+			errMsg = err.Error()
+			logger.Debug("VM guest agent: %s: sensor %s: %v", s.VM, s.Name, err)
+		} else {
+			names := make([]string, len(fresh))
+			for i, v := range fresh {
+				names[i] = v.name
+			}
+			p.jsonNames[key] = names
+		}
+	}
+	for _, v := range fresh {
+		old[v.name] = dto.VMGuestSensor{Name: v.name, Value: v.value, UpdatedAt: &now}
+	}
+	for _, name := range p.jsonNames[key] {
+		if out == nil || errMsg != "" {
+			sensor := old[name]
+			sensor.Value, sensor.Error = nil, errMsg
+			old[name] = sensor
+		}
+	}
+
+	list := []dto.VMGuestSensor{}
+	for _, c := range p.cfg.Sensors {
+		if c.VM != s.VM {
+			continue
+		}
+		if !c.JSON {
+			list = append(list, old[c.Name])
+			continue
+		}
+		for _, name := range p.jsonNames[c.VM+"/"+c.Name] {
+			list = append(list, old[name])
+		}
+	}
+	p.infos[s.VM].Sensors = list
+}
+
+// jsonSensorValue is one key of a JSON sensor's output.
+type jsonSensorValue struct {
+	name  string
+	value *string
+}
+
+var vmGuestSensorNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+var jsonSensorKeyRegex = regexp.MustCompile(`[^a-z0-9_]`)
+
+// expandJSONSensor turns a flat JSON object into one value per key, named
+// <name>_<key> and sorted by key. Keys are lowercased and any other character
+// than a letter, digit or underscore becomes an underscore. Keys whose name is
+// empty, longer than 64 characters, already used or in reserved are skipped, as
+// are nested objects and arrays. Numbers are written in plain decimal, strings
+// as they are, booleans as true or false, and null as a nil value.
+func expandJSONSensor(name, out string, reserved map[string]bool) ([]jsonSensorValue, error) {
+	dec := json.NewDecoder(strings.NewReader(out))
+	dec.UseNumber()
+	var obj map[string]any
+	if err := dec.Decode(&obj); err != nil || obj == nil {
+		return nil, errors.New("output is not a JSON object")
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("output is not a JSON object")
+	}
+
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var values []jsonSensorValue
+	used := make(map[string]bool)
+	for _, k := range keys {
+		suffix := jsonSensorKeyRegex.ReplaceAllString(strings.ToLower(k), "_")
+		full := name + "_" + suffix
+		switch {
+		case suffix == "" || !vmGuestSensorNamePattern.MatchString(full):
+			logger.Warning("VM guest agent: sensor %s: skipping key %q: name %q is not 1-64 characters", name, k, full)
+			continue
+		case used[full] || reserved[full]:
+			logger.Warning("VM guest agent: sensor %s: skipping key %q: name %q is already used", name, k, full)
+			continue
+		}
+		var value *string
+		switch v := obj[k].(type) {
+		case nil:
+		case json.Number:
+			f, err := v.Float64()
+			if err != nil {
+				logger.Debug("VM guest agent: sensor %s: skipping key %q: %v", name, k, err)
+				continue
+			}
+			s := strconv.FormatFloat(f, 'f', -1, 64)
+			value = &s
+		case string:
+			value = &v
+		case bool:
+			s := strconv.FormatBool(v)
+			value = &s
+		default:
+			logger.Debug("VM guest agent: sensor %s: skipping key %q: nested value", name, k)
+			continue
+		}
+		used[full] = true
+		values = append(values, jsonSensorValue{name: full, value: value})
+	}
+	return values, nil
 }
 
 // agentCall runs a guest agent command and decodes its "return" value into

@@ -603,3 +603,226 @@ func TestClosingDialerClosedBeforeDial(t *testing.T) {
 		t.Error("want error after close")
 	}
 }
+
+func strp(s string) *string { return &s }
+
+func TestExpandJSONSensor(t *testing.T) {
+	tests := []struct {
+		name     string
+		out      string
+		reserved map[string]bool
+		want     []jsonSensorValue
+		wantErr  bool
+	}{
+		{
+			name: "frames example, keys sorted",
+			out:  `{"avg":98.4,"low5":91,"low1":82,"worst":66,"graph":"82|10.4,10.0"}`,
+			want: []jsonSensorValue{
+				{"frames_avg", strp("98.4")}, {"frames_graph", strp("82|10.4,10.0")},
+				{"frames_low1", strp("82")}, {"frames_low5", strp("91")}, {"frames_worst", strp("66")},
+			},
+		},
+		{
+			name: "numbers without exponent noise",
+			out:  `{"a":1e3,"b":0.5,"c":-2,"d":1.50,"e":12345678901234567890}`,
+			want: []jsonSensorValue{
+				{"frames_a", strp("1000")}, {"frames_b", strp("0.5")}, {"frames_c", strp("-2")},
+				{"frames_d", strp("1.5")}, {"frames_e", strp("12345678901234567000")},
+			},
+		},
+		{
+			name: "string, bool and null",
+			out:  `{"s":" hi ","t":true,"f":false,"n":null}`,
+			want: []jsonSensorValue{
+				{"frames_f", strp("false")}, {"frames_n", nil}, {"frames_s", strp(" hi ")}, {"frames_t", strp("true")},
+			},
+		},
+		{
+			name: "nested values skipped",
+			out:  `{"obj":{"a":1},"arr":[1,2],"ok":1}`,
+			want: []jsonSensorValue{{"frames_ok", strp("1")}},
+		},
+		{
+			name: "number out of range skipped",
+			out:  `{"big":1e999,"ok":1}`,
+			want: []jsonSensorValue{{"frames_ok", strp("1")}},
+		},
+		{
+			name:     "keys sanitised, empty key and name clashes skipped",
+			out:      `{"Low 5%":1,"":2,"low_5_":3,"LOW_5_":4,"taken":5}`,
+			reserved: map[string]bool{"frames_taken": true},
+			want:     []jsonSensorValue{{"frames_low_5_", strp("4")}},
+		},
+		{
+			name: "key too long skipped",
+			out:  `{"` + strings.Repeat("k", 70) + `":1,"ok":2}`,
+			want: []jsonSensorValue{{"frames_ok", strp("2")}},
+		},
+		{name: "empty object", out: `{}`},
+		{name: "invalid JSON", out: `{"a":`, wantErr: true},
+		{name: "empty output", out: ``, wantErr: true},
+		{name: "array", out: `[1,2]`, wantErr: true},
+		{name: "scalar", out: `42`, wantErr: true},
+		{name: "null", out: `null`, wantErr: true},
+		{name: "trailing data", out: `{"a":1} {"b":2}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := expandJSONSensor("frames", tt.out, tt.reserved)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+			for i := range got {
+				w := tt.want[i]
+				if got[i].name != w.name || (got[i].value == nil) != (w.value == nil) || (w.value != nil && *got[i].value != *w.value) {
+					t.Errorf("[%d] got %s=%v, want %s=%v", i, got[i].name, got[i].value, w.name, w.value)
+				}
+			}
+		})
+	}
+}
+
+var framesSensor = domain.VMGuestSensorConfig{VM: "Windows 11", Name: "frames", Command: []string{"frames.ps1"}, Interval: 5, JSON: true}
+
+func sensorValues(infoSensors []dto.VMGuestSensor) map[string]string {
+	m := make(map[string]string)
+	for _, s := range infoSensors {
+		if s.Value == nil {
+			m[s.Name] = "<nil>"
+		} else {
+			m[s.Name] = *s.Value
+		}
+	}
+	return m
+}
+
+func sensorNames(infoSensors []dto.VMGuestSensor) string {
+	names := make([]string, len(infoSensors))
+	for i, s := range infoSensors {
+		names[i] = s.Name
+	}
+	return strings.Join(names, ",")
+}
+
+func TestVMGuestPoller_JSONSensor(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"worst":66,"avg":98.4,"n":null,"nested":{"a":1}}`}
+	// A plain sensor before and a plain sensor named like a key after.
+	after := domain.VMGuestSensorConfig{VM: "Windows 11", Name: "frames_worst", Command: []string{"fps.exe"}, Interval: 5}
+	p, sub := testPoller(f, fpsSensor, framesSensor, after)
+
+	if got := sensorNames(p.infos["Windows 11"].Sensors); got != "fps,frames_worst" {
+		t.Errorf("before first run = %s", got)
+	}
+	p.runSensor(context.Background(), framesSensor)
+	info := nextGuestUpdate(t, sub)
+	if got := sensorNames(info.Sensors); got != "fps,frames_avg,frames_n,frames_worst" {
+		t.Errorf("names = %s", got)
+	}
+	// frames_worst is a configured sensor, so the key does not shadow it.
+	if v := sensorValues(info.Sensors); v["frames_avg"] != "98.4" || v["frames_n"] != "<nil>" || v["frames_worst"] != "<nil>" {
+		t.Errorf("values = %v", v)
+	}
+	for _, s := range info.Sensors {
+		if s.Name == "frames_avg" && (s.UpdatedAt == nil || s.Error != "") {
+			t.Errorf("sensor = %+v", s)
+		}
+	}
+
+	// A key that disappears from the output drops out; the others update.
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":50,"extra":"x"}`}
+	p.runSensor(context.Background(), framesSensor)
+	info = nextGuestUpdate(t, sub)
+	if got := sensorNames(info.Sensors); got != "fps,frames_avg,frames_extra,frames_worst" {
+		t.Errorf("names = %s", got)
+	}
+	if v := sensorValues(info.Sensors); v["frames_avg"] != "50" || v["frames_extra"] != "x" {
+		t.Errorf("values = %v", v)
+	}
+}
+
+func TestVMGuestPoller_JSONSensorFailureKeepsKeys(t *testing.T) {
+	fastGuestExec(t)
+	for name, prog := range map[string]fakeGuestProgram{
+		"invalid JSON": {out: `not json`},
+		"array":        {out: `[1]`},
+		"exit code":    {exitCode: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := windowsGuest()
+			f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":98.4,"low1":82}`}
+			p, sub := testPoller(f, framesSensor)
+			p.runSensor(context.Background(), framesSensor)
+			nextGuestUpdate(t, sub)
+
+			f.programs["frames.ps1"] = prog
+			p.runSensor(context.Background(), framesSensor)
+			info := nextGuestUpdate(t, sub)
+			if got := sensorNames(info.Sensors); got != "frames_avg,frames_low1" {
+				t.Fatalf("names = %s", got)
+			}
+			for _, s := range info.Sensors {
+				if s.Value != nil || s.Error == "" || s.UpdatedAt == nil {
+					t.Errorf("sensor = %+v", s)
+				}
+			}
+
+			// A good run brings the values back and clears the error.
+			f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":1,"low1":2}`}
+			p.runSensor(context.Background(), framesSensor)
+			for _, s := range nextGuestUpdate(t, sub).Sensors {
+				if s.Value == nil || s.Error != "" {
+					t.Errorf("sensor = %+v", s)
+				}
+			}
+		})
+	}
+}
+
+func TestVMGuestPoller_JSONSensorVMOff(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":98.4,"low1":82}`}
+	p, sub := testPoller(f, framesSensor)
+	p.runSensor(context.Background(), framesSensor)
+	nextGuestUpdate(t, sub)
+
+	f.states["Windows 11"] = libvirt.DomainShutoff
+	p.updateAll(context.Background())
+	info := nextGuestUpdate(t, sub)
+	if got := sensorNames(info.Sensors); got != "frames_avg,frames_low1" {
+		t.Fatalf("names after update = %s", got)
+	}
+	p.runSensor(context.Background(), framesSensor)
+	info = nextGuestUpdate(t, sub)
+	if got := sensorNames(info.Sensors); got != "frames_avg,frames_low1" {
+		t.Fatalf("names = %s", got)
+	}
+	for _, s := range info.Sensors {
+		if s.Value != nil || s.Error != "" {
+			t.Errorf("sensor = %+v", s)
+		}
+	}
+}
+
+func TestVMGuestPoller_JSONSensorOtherVMUntouched(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":98.4}`}
+	f.states["Linux"] = libvirt.DomainRunning
+	hub := domain.NewEventBus(100)
+	other := domain.VMGuestSensorConfig{VM: "Linux", Name: "frames", Command: []string{"frames.ps1"}, Interval: 5, JSON: true}
+	p := newVMGuestPoller(domain.VMGuestConfig{VMs: []string{"Windows 11", "Linux"}, Interval: 30, Sensors: []domain.VMGuestSensorConfig{framesSensor, other}}, hub)
+	p.dial = func(context.Context) (guestConn, error) { return f, nil }
+	p.runSensor(context.Background(), framesSensor)
+	p.runSensor(context.Background(), other)
+	for _, vm := range []string{"Windows 11", "Linux"} {
+		if got := sensorNames(p.infos[vm].Sensors); got != "frames_avg" {
+			t.Errorf("%s sensors = %s", vm, got)
+		}
+	}
+}
