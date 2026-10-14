@@ -121,7 +121,7 @@ func itoa(n int) string {
 const (
 	testSMIOut  = "0, NVIDIA GeForce RTX 4090, 34, 12, 13, 24564, 63.29, 0, 2535\r\n"
 	testDiskOut = `{"Model":"WD_BLACK SN850X 4000GB","Serial":"E823_8FA6. ","Bus":"NVMe","Temp":35,"TempMax":90,"Wear":1}`
-	testFSInfo  = `[{"mountpoint":"C:\\","type":"NTFS","total-bytes":1000,"used-bytes":400},{"mountpoint":"","type":"FAT32"}]`
+	testFSInfo  = `[{"mountpoint":"C:\\","type":"NTFS","total-bytes":1000,"used-bytes":400},{"mountpoint":"","type":"FAT32"},{"mountpoint":"System Reserved","type":"NTFS","total-bytes":5},{"mountpoint":"/data","type":"xfs"}]`
 )
 
 func windowsGuest() *fakeGuest {

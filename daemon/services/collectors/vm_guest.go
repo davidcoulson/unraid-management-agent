@@ -523,11 +523,14 @@ type guestFSInfo struct {
 	UsedBytes  *uint64 `json:"used-bytes"`
 }
 
-// filesystemsFromFSInfo keeps mounted filesystems that report a size.
+// filesystemsFromFSInfo keeps mounted filesystems that report a size. Windows
+// lists volumes without a drive letter by label ("System Reserved"), which is
+// not a mount point and need not be unique, so only paths are kept.
 func filesystemsFromFSInfo(list []guestFSInfo) []dto.VMGuestFilesystem {
 	out := []dto.VMGuestFilesystem{}
 	for _, f := range list {
-		if f.Mountpoint == "" || f.TotalBytes == nil {
+		isPath := strings.HasPrefix(f.Mountpoint, "/") || strings.HasSuffix(f.Mountpoint, `:\`)
+		if !isPath || f.TotalBytes == nil {
 			continue
 		}
 		out = append(out, dto.VMGuestFilesystem{Mountpoint: f.Mountpoint, Type: f.Type, TotalBytes: f.TotalBytes, UsedBytes: f.UsedBytes})
