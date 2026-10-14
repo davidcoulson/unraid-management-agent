@@ -44,7 +44,9 @@ func (c *VMCollector) Start(ctx context.Context, interval time.Duration) {
 	logger.Info("Starting VM collector (interval: %v)", interval)
 
 	if len(c.appCtx.VMGuest.VMs) > 0 {
-		go newVMGuestPoller(c.appCtx.VMGuest, c.appCtx.Hub).Start(ctx)
+		var guests sync.WaitGroup
+		guests.Go(func() { newVMGuestPoller(c.appCtx.VMGuest, c.appCtx.Hub).Start(ctx) })
+		defer guests.Wait()
 	}
 
 	// Run once immediately with panic recovery

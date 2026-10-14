@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/digitalocean/go-libvirt"
+	"github.com/digitalocean/go-libvirt/socket"
+	"github.com/digitalocean/go-libvirt/socket/dialers"
 
 	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
 	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
@@ -40,6 +42,12 @@ var (
 	guestExecTimeout = 30 * time.Second
 	// guestExecPoll is the wait between guest-exec-status calls.
 	guestExecPoll = 250 * time.Millisecond
+	// guestConnLimit bounds one full update or sensor run. When it passes,
+	// or the poller stops, the libvirt socket is closed so a stalled RPC
+	// returns instead of blocking forever.
+	guestConnLimit = 2 * time.Minute
+	// newGuestDialer opens the libvirt socket.
+	newGuestDialer = func() socket.Dialer { return dialers.NewLocal() }
 )
 
 // guestConn is the part of *libvirt.Libvirt the guest poller uses.
@@ -50,9 +58,67 @@ type guestConn interface {
 	Disconnect() error
 }
 
-func dialLibvirt() (guestConn, error) {
-	uri, _ := url.Parse(string(libvirt.QEMUSystem))
-	return libvirt.ConnectToURI(uri)
+// closingDialer remembers the socket it opens so it can be closed directly.
+// Libvirt.Disconnect sends an RPC first, which would stall as well.
+type closingDialer struct {
+	socket.Dialer
+	mu     sync.Mutex
+	conn   net.Conn
+	closed bool
+}
+
+func (d *closingDialer) Dial() (net.Conn, error) {
+	conn, err := d.Dialer.Dial()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err == nil && d.closed {
+		_ = conn.Close()
+		return nil, errors.New("libvirt connection cancelled")
+	}
+	d.conn = conn
+	return conn, err
+}
+
+func (d *closingDialer) close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	if d.conn != nil {
+		_ = d.conn.Close()
+	}
+}
+
+// watchedConn is a libvirt connection whose socket is closed when ctx is
+// cancelled or guestConnLimit passes.
+type watchedConn struct {
+	*libvirt.Libvirt
+	done chan struct{}
+}
+
+func (c *watchedConn) Disconnect() error {
+	close(c.done)
+	return c.Libvirt.Disconnect()
+}
+
+func dialLibvirt(ctx context.Context) (guestConn, error) {
+	d := &closingDialer{Dialer: newGuestDialer()}
+	c := &watchedConn{Libvirt: libvirt.NewWithDialer(d), done: make(chan struct{})}
+	timer := time.NewTimer(guestConnLimit)
+	go func() {
+		defer timer.Stop()
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			d.close()
+		case <-timer.C:
+			d.close()
+		}
+	}()
+	if err := c.ConnectToURI(libvirt.QEMUSystem); err != nil {
+		close(c.done)
+		return nil, err
+	}
+	return c, nil
 }
 
 // vmGuestPoller reads data from inside VMs through the QEMU guest agent: a
@@ -62,14 +128,19 @@ func dialLibvirt() (guestConn, error) {
 type vmGuestPoller struct {
 	cfg  domain.VMGuestConfig
 	hub  *domain.EventBus
-	dial func() (guestConn, error)
+	dial func(context.Context) (guestConn, error)
 
+	// pubMu keeps snapshots in the order they are published.
+	pubMu sync.Mutex
 	mu    sync.Mutex
 	infos map[string]*dto.VMGuestInfo
+	// pending holds the guest PID of a command that has not finished, by
+	// VM and command, so it is not started again until it is reaped.
+	pending map[string]int
 }
 
 func newVMGuestPoller(cfg domain.VMGuestConfig, hub *domain.EventBus) *vmGuestPoller {
-	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo)}
+	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo), pending: make(map[string]int)}
 	for _, vm := range cfg.VMs {
 		p.infos[vm] = &dto.VMGuestInfo{
 			VMName:      vm,
@@ -94,10 +165,10 @@ func (p *vmGuestPoller) Start(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.loop(ctx, time.Duration(s.Interval)*time.Second, func() { p.runSensor(s) })
+			p.loop(ctx, time.Duration(s.Interval)*time.Second, func() { p.runSensor(ctx, s) })
 		}()
 	}
-	p.loop(ctx, time.Duration(p.cfg.Interval)*time.Second, p.updateAll)
+	p.loop(ctx, time.Duration(p.cfg.Interval)*time.Second, func() { p.updateAll(ctx) })
 	wg.Wait()
 }
 
@@ -126,6 +197,8 @@ func (p *vmGuestPoller) loop(ctx context.Context, interval time.Duration, fn fun
 
 // publish sends a copy of every VM's current data.
 func (p *vmGuestPoller) publish() {
+	p.pubMu.Lock()
+	defer p.pubMu.Unlock()
 	p.mu.Lock()
 	out := make([]*dto.VMGuestInfo, 0, len(p.cfg.VMs))
 	for _, vm := range p.cfg.VMs {
@@ -141,8 +214,8 @@ func (p *vmGuestPoller) publish() {
 }
 
 // updateAll runs the full update for every VM and publishes once.
-func (p *vmGuestPoller) updateAll() {
-	conn, err := p.dial()
+func (p *vmGuestPoller) updateAll(ctx context.Context) {
+	conn, err := p.dial(ctx)
 	if err != nil {
 		logger.Debug("VM guest agent: libvirt connection failed: %v", err)
 		for _, vm := range p.cfg.VMs {
@@ -203,7 +276,7 @@ func (p *vmGuestPoller) updateVM(conn guestConn, vm string) {
 	if osInfo.ID == "mswindows" {
 		smi = guestNvidiaSMIWindows
 	}
-	smiOut, gpuErr := guestExec(conn, dom, smi, []string{guestNvidiaSMIQuery, "--format=csv,noheader,nounits"})
+	smiOut, gpuErr := p.exec(conn, dom, vm+"/nvidia-smi", smi, []string{guestNvidiaSMIQuery, "--format=csv,noheader,nounits"})
 	var gpus []dto.VMGuestGPU
 	if gpuErr == nil {
 		gpus = parseNvidiaSMI(smiOut)
@@ -215,7 +288,7 @@ func (p *vmGuestPoller) updateVM(conn guestConn, vm string) {
 	var diskErr error
 	if osInfo.ID == "mswindows" {
 		var out string
-		out, diskErr = guestExec(conn, dom, guestPowerShell, []string{"-NoProfile", "-NonInteractive", "-Command", guestDiskScript})
+		out, diskErr = p.exec(conn, dom, vm+"/disks", guestPowerShell, []string{"-NoProfile", "-NonInteractive", "-Command", guestDiskScript})
 		if diskErr == nil {
 			disks, diskErr = parseGuestDisks(out)
 		}
@@ -270,10 +343,10 @@ func (p *vmGuestPoller) setOffline(vm string, running bool, msg string) {
 }
 
 // runSensor runs one custom sensor command and publishes the result.
-func (p *vmGuestPoller) runSensor(s domain.VMGuestSensorConfig) {
+func (p *vmGuestPoller) runSensor(ctx context.Context, s domain.VMGuestSensorConfig) {
 	var value *string
 	errMsg := ""
-	conn, err := p.dial()
+	conn, err := p.dial(ctx)
 	if err != nil {
 		errMsg = "libvirt connection failed"
 	} else {
@@ -283,7 +356,7 @@ func (p *vmGuestPoller) runSensor(s domain.VMGuestSensorConfig) {
 		case err != nil:
 			errMsg = err.Error()
 		case running:
-			out, err := guestExec(conn, dom, s.Command[0], s.Command[1:])
+			out, err := p.exec(conn, dom, s.VM+"/sensor/"+s.Name, s.Command[0], s.Command[1:])
 			if err != nil {
 				errMsg = err.Error()
 				logger.Debug("VM guest agent: %s: sensor %s: %v", s.VM, s.Name, err)
@@ -340,9 +413,24 @@ func agentCall(conn guestConn, dom libvirt.Domain, cmd string, args any, out any
 	return json.Unmarshal(reply.Return, out)
 }
 
-// guestExec runs a program inside the guest without a shell and returns its
-// standard output. A non-zero exit code is an error.
-func guestExec(conn guestConn, dom libvirt.Domain, path string, args []string) (string, error) {
+// exec runs a program inside the guest without a shell and returns its
+// standard output. A command that did not finish last time is not started
+// again until the guest reports it exited, which also releases its status.
+func (p *vmGuestPoller) exec(conn guestConn, dom libvirt.Domain, key, path string, args []string) (string, error) {
+	p.mu.Lock()
+	pid, busy := p.pending[key]
+	p.mu.Unlock()
+	if busy {
+		st, err := execStatus(conn, dom, pid)
+		if err == nil && !st.Exited {
+			return "", errors.New("previous run is still running")
+		}
+		// Exited (and now reaped), or unknown to a guest that restarted.
+		p.mu.Lock()
+		delete(p.pending, key)
+		p.mu.Unlock()
+	}
+
 	var started struct {
 		PID int `json:"pid"`
 	}
@@ -352,29 +440,60 @@ func guestExec(conn guestConn, dom libvirt.Domain, path string, args []string) (
 	}
 	deadline := time.Now().Add(guestExecTimeout)
 	for {
-		var status struct {
-			Exited   bool   `json:"exited"`
-			ExitCode int    `json:"exitcode"`
-			OutData  string `json:"out-data"`
-			ErrData  string `json:"err-data"`
+		st, err := execStatus(conn, dom, started.PID)
+		if err == nil && st.Exited {
+			return st.result()
 		}
-		if err := agentCall(conn, dom, "guest-exec-status", map[string]int{"pid": started.PID}, &status); err != nil {
+		if err == nil && time.Now().After(deadline) {
+			err = fmt.Errorf("timed out after %v", guestExecTimeout)
+		}
+		if err != nil {
+			p.mu.Lock()
+			p.pending[key] = started.PID
+			p.mu.Unlock()
 			return "", err
-		}
-		if status.Exited {
-			out, _ := base64.StdEncoding.DecodeString(status.OutData)
-			if status.ExitCode != 0 {
-				stderr, _ := base64.StdEncoding.DecodeString(status.ErrData)
-				line, _, _ := strings.Cut(strings.TrimSpace(string(stderr)), "\n")
-				return "", fmt.Errorf("exit code %d: %s", status.ExitCode, truncate(strings.TrimSpace(line), 200))
-			}
-			return string(out), nil
-		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("timed out after %v", guestExecTimeout)
 		}
 		time.Sleep(guestExecPoll)
 	}
+}
+
+// guestExecStatus is the reply to guest-exec-status. A process that ended
+// abnormally has signal set and no exitcode.
+type guestExecStatus struct {
+	Exited       bool   `json:"exited"`
+	ExitCode     *int   `json:"exitcode"`
+	Signal       *int   `json:"signal"`
+	OutData      string `json:"out-data"`
+	ErrData      string `json:"err-data"`
+	OutTruncated bool   `json:"out-truncated"`
+}
+
+func execStatus(conn guestConn, dom libvirt.Domain, pid int) (guestExecStatus, error) {
+	var st guestExecStatus
+	err := agentCall(conn, dom, "guest-exec-status", map[string]int{"pid": pid}, &st)
+	return st, err
+}
+
+// result returns the output of an exited process, or an error unless it
+// exited with code 0 and its output is complete.
+func (st guestExecStatus) result() (string, error) {
+	switch {
+	case st.Signal != nil:
+		return "", fmt.Errorf("terminated by signal %d", *st.Signal)
+	case st.ExitCode == nil:
+		return "", errors.New("no exit code")
+	case *st.ExitCode != 0:
+		stderr, _ := base64.StdEncoding.DecodeString(st.ErrData)
+		line, _, _ := strings.Cut(strings.TrimSpace(string(stderr)), "\n")
+		return "", fmt.Errorf("exit code %d: %s", *st.ExitCode, truncate(strings.TrimSpace(line), 200))
+	case st.OutTruncated:
+		return "", errors.New("output truncated")
+	}
+	out, err := base64.StdEncoding.DecodeString(st.OutData)
+	if err != nil {
+		return "", fmt.Errorf("decode output: %w", err)
+	}
+	return string(out), nil
 }
 
 func truncate(s string, n int) string {

@@ -5,12 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/digitalocean/go-libvirt"
+	"github.com/digitalocean/go-libvirt/libvirttest"
+	"github.com/digitalocean/go-libvirt/socket"
 
 	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
 	"github.com/tinkerologie/unraid-management-agent/daemon/dto"
@@ -144,7 +147,7 @@ func testPoller(f *fakeGuest, sensors ...domain.VMGuestSensorConfig) (*vmGuestPo
 	hub := domain.NewEventBus(100)
 	sub := hub.Sub("vm_guest_update")
 	p := newVMGuestPoller(domain.VMGuestConfig{VMs: []string{"Windows 11"}, Interval: 30, Sensors: sensors}, hub)
-	p.dial = func() (guestConn, error) { return f, nil }
+	p.dial = func(context.Context) (guestConn, error) { return f, nil }
 	return p, sub
 }
 
@@ -169,7 +172,7 @@ func TestVMGuestPoller_RunningWindows(t *testing.T) {
 	fastGuestExec(t)
 	p, sub := testPoller(windowsGuest(), fpsSensor)
 
-	p.updateAll()
+	p.updateAll(context.Background())
 	info := nextGuestUpdate(t, sub)
 	if !info.Running || !info.AgentConnected || info.Hostname != "WIN11" || info.OSName != "Microsoft Windows 11" {
 		t.Errorf("info = %+v", info)
@@ -187,7 +190,7 @@ func TestVMGuestPoller_RunningWindows(t *testing.T) {
 		t.Errorf("sensor before first run = %+v", info.Sensors)
 	}
 
-	p.runSensor(fpsSensor)
+	p.runSensor(context.Background(), fpsSensor)
 	info = nextGuestUpdate(t, sub)
 	if s := info.Sensors[0]; s.Value == nil || *s.Value != "144" || s.UpdatedAt == nil || s.Error != "" {
 		t.Errorf("sensor = %+v", s)
@@ -198,13 +201,13 @@ func TestVMGuestPoller_VMOffKeepsEntriesWithNullReadings(t *testing.T) {
 	fastGuestExec(t)
 	f := windowsGuest()
 	p, sub := testPoller(f, fpsSensor)
-	p.updateAll()
+	p.updateAll(context.Background())
 	nextGuestUpdate(t, sub)
-	p.runSensor(fpsSensor)
+	p.runSensor(context.Background(), fpsSensor)
 	nextGuestUpdate(t, sub)
 
 	f.states["Windows 11"] = libvirt.DomainShutoff
-	p.updateAll()
+	p.updateAll(context.Background())
 	info := nextGuestUpdate(t, sub)
 	if info.Running || info.AgentConnected || info.Error != "" {
 		t.Errorf("info = %+v", info)
@@ -222,7 +225,7 @@ func TestVMGuestPoller_VMOffKeepsEntriesWithNullReadings(t *testing.T) {
 		t.Errorf("sensor = %+v", s)
 	}
 
-	p.runSensor(fpsSensor)
+	p.runSensor(context.Background(), fpsSensor)
 	if s := nextGuestUpdate(t, sub).Sensors[0]; s.Value != nil || s.Error != "" {
 		t.Errorf("sensor while off = %+v", s)
 	}
@@ -232,12 +235,12 @@ func TestVMGuestPoller_AgentDown(t *testing.T) {
 	f := windowsGuest()
 	f.agentDown = true
 	p, sub := testPoller(f, fpsSensor)
-	p.updateAll()
+	p.updateAll(context.Background())
 	info := nextGuestUpdate(t, sub)
 	if !info.Running || info.AgentConnected || info.Error != "guest agent not responding" {
 		t.Errorf("info = %+v", info)
 	}
-	p.runSensor(fpsSensor)
+	p.runSensor(context.Background(), fpsSensor)
 	if s := nextGuestUpdate(t, sub).Sensors[0]; s.Value != nil || !strings.Contains(s.Error, "not connected") {
 		t.Errorf("sensor = %+v", s)
 	}
@@ -247,11 +250,11 @@ func TestVMGuestPoller_LookupErrors(t *testing.T) {
 	f := windowsGuest()
 	delete(f.states, "Windows 11")
 	p, sub := testPoller(f, fpsSensor)
-	p.updateAll()
+	p.updateAll(context.Background())
 	if info := nextGuestUpdate(t, sub); info.Running || !strings.HasPrefix(info.Error, "VM not found") {
 		t.Errorf("info = %+v", info)
 	}
-	p.runSensor(fpsSensor)
+	p.runSensor(context.Background(), fpsSensor)
 	if s := nextGuestUpdate(t, sub).Sensors[0]; !strings.HasPrefix(s.Error, "VM not found") {
 		t.Errorf("sensor = %+v", s)
 	}
@@ -259,7 +262,7 @@ func TestVMGuestPoller_LookupErrors(t *testing.T) {
 	f = windowsGuest()
 	f.stateErr = errors.New("state failed")
 	p, sub = testPoller(f)
-	p.updateAll()
+	p.updateAll(context.Background())
 	if info := nextGuestUpdate(t, sub); info.Error != "state failed" {
 		t.Errorf("info = %+v", info)
 	}
@@ -267,12 +270,12 @@ func TestVMGuestPoller_LookupErrors(t *testing.T) {
 
 func TestVMGuestPoller_DialFailure(t *testing.T) {
 	p, sub := testPoller(windowsGuest(), fpsSensor)
-	p.dial = func() (guestConn, error) { return nil, errors.New("no socket") }
-	p.updateAll()
+	p.dial = func(context.Context) (guestConn, error) { return nil, errors.New("no socket") }
+	p.updateAll(context.Background())
 	if info := nextGuestUpdate(t, sub); info.Error != "libvirt connection failed" {
 		t.Errorf("info = %+v", info)
 	}
-	p.runSensor(fpsSensor)
+	p.runSensor(context.Background(), fpsSensor)
 	if s := nextGuestUpdate(t, sub).Sensors[0]; s.Error != "libvirt connection failed" {
 		t.Errorf("sensor = %+v", s)
 	}
@@ -282,14 +285,14 @@ func TestVMGuestPoller_CommandFailuresClearReadings(t *testing.T) {
 	fastGuestExec(t)
 	f := windowsGuest()
 	p, sub := testPoller(f)
-	p.updateAll()
+	p.updateAll(context.Background())
 	nextGuestUpdate(t, sub)
 
 	// fsinfo fails, nvidia-smi exits non-zero, the disk query is not JSON.
 	f.badReply = "guest-get-fsinfo"
 	f.programs[guestNvidiaSMIWindows] = fakeGuestProgram{exitCode: 9, stderr: "NVIDIA-SMI has failed\nmore"}
 	f.programs[guestPowerShell] = fakeGuestProgram{out: "oops"}
-	p.updateAll()
+	p.updateAll(context.Background())
 	info := nextGuestUpdate(t, sub)
 	if !info.AgentConnected || len(info.GPUs) != 1 || info.GPUs[0].TemperatureC != nil {
 		t.Errorf("gpus = %+v", info.GPUs)
@@ -303,7 +306,7 @@ func TestVMGuestPoller_CommandFailuresClearReadings(t *testing.T) {
 
 	// The disk query itself fails to start.
 	delete(f.programs, guestPowerShell)
-	p.updateAll()
+	p.updateAll(context.Background())
 	if info := nextGuestUpdate(t, sub); len(info.Disks) != 1 || info.Disks[0].TemperatureC != nil {
 		t.Errorf("disks = %+v", info.Disks)
 	}
@@ -315,31 +318,77 @@ func TestVMGuestPoller_LinuxGuest(t *testing.T) {
 	f.replies["guest-get-osinfo"] = `{"id":"ubuntu","pretty-name":"Ubuntu 24.04"}`
 	f.programs[guestNvidiaSMILinux] = fakeGuestProgram{out: testSMIOut}
 	p, sub := testPoller(f)
-	p.updateAll()
+	p.updateAll(context.Background())
 	info := nextGuestUpdate(t, sub)
 	if len(info.GPUs) != 1 || len(info.Disks) != 0 || info.OSName != "Ubuntu 24.04" {
 		t.Errorf("info = %+v", info)
 	}
 }
 
-func TestGuestExec(t *testing.T) {
+func TestVMGuestExec(t *testing.T) {
 	fastGuestExec(t)
 	f := windowsGuest()
+	p, _ := testPoller(f)
 	dom := libvirt.Domain{Name: "Windows 11"}
 
+	// A run that times out is remembered and not started again while it runs.
 	f.programs["slow.exe"] = fakeGuestProgram{running: true}
-	if _, err := guestExec(f, dom, "slow.exe", nil); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("slow: err = %v", err)
+	}
+	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil || err.Error() != "previous run is still running" {
+		t.Errorf("still running: err = %v", err)
+	}
+	starts := len(f.pids)
+
+	// Once it exits it is reaped and the next run starts.
+	f.programs["slow.exe"] = fakeGuestProgram{out: "done"}
+	if out, err := p.exec(f, dom, "k", "slow.exe", nil); err != nil || out != "done" || len(f.pids) != starts+1 {
+		t.Errorf("after exit: out = %q, err = %v", out, err)
+	}
+	if _, ok := p.pending["k"]; ok {
+		t.Error("pending PID not cleared")
+	}
+
+	// A status error mid-run keeps the PID pending.
+	f.empty = "guest-exec-status"
+	if _, err := p.exec(f, dom, "k2", "fps.exe", nil); err == nil {
+		t.Error("empty status reply: want error")
+	}
+	if _, ok := p.pending["k2"]; !ok {
+		t.Error("PID not kept after status error")
 	}
 
 	f.programs["fail.exe"] = fakeGuestProgram{exitCode: 1, stderr: strings.Repeat("x", 300)}
-	if _, err := guestExec(f, dom, "fail.exe", nil); err == nil || len(err.Error()) != len("exit code 1: ")+200 {
+	f.empty = ""
+	if _, err := p.exec(f, dom, "k3", "fail.exe", nil); err == nil || len(err.Error()) != len("exit code 1: ")+200 {
 		t.Errorf("fail: err = %v", err)
 	}
+	if _, err := p.exec(f, dom, "k4", "missing.exe", nil); err == nil {
+		t.Error("missing program: want error")
+	}
+}
 
-	f.empty = "guest-exec-status"
-	if _, err := guestExec(f, dom, "fps.exe", nil); err == nil {
-		t.Error("empty status reply: want error")
+func TestGuestExecStatusResult(t *testing.T) {
+	zero, one := 0, 1
+	ok := base64.StdEncoding.EncodeToString([]byte("out"))
+	tests := []struct {
+		name    string
+		st      guestExecStatus
+		want    string
+		wantErr string
+	}{
+		{"success", guestExecStatus{ExitCode: &zero, OutData: ok}, "out", ""},
+		{"signal", guestExecStatus{Signal: &one}, "", "terminated by signal 1"},
+		{"no exit code", guestExecStatus{}, "", "no exit code"},
+		{"truncated", guestExecStatus{ExitCode: &zero, OutTruncated: true}, "", "output truncated"},
+		{"bad base64", guestExecStatus{ExitCode: &zero, OutData: "!!"}, "", "decode output"},
+	}
+	for _, tt := range tests {
+		got, err := tt.st.result()
+		if got != tt.want || (tt.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
+			t.Errorf("%s: got %q, %v", tt.name, got, err)
+		}
 	}
 }
 
@@ -437,9 +486,61 @@ func TestVMGuestLoopRecoversAndTicks(t *testing.T) {
 	}
 }
 
+type pipeDialer struct{ err error }
+
+// Dial returns a connection on which libvirt never replies.
+func (d pipeDialer) Dial() (net.Conn, error) {
+	if d.err != nil {
+		return nil, d.err
+	}
+	client, _ := net.Pipe()
+	return client, nil
+}
+
+func useGuestDialer(t *testing.T, d socket.Dialer, limit time.Duration) {
+	t.Helper()
+	oldDialer, oldLimit := newGuestDialer, guestConnLimit
+	newGuestDialer, guestConnLimit = func() socket.Dialer { return d }, limit
+	t.Cleanup(func() { newGuestDialer, guestConnLimit = oldDialer, oldLimit })
+}
+
 func TestDialLibvirt(t *testing.T) {
-	conn, err := dialLibvirt()
-	if err == nil {
-		_ = conn.Disconnect()
+	t.Run("connects", func(t *testing.T) {
+		useGuestDialer(t, libvirttest.New(), time.Minute)
+		conn, err := dialLibvirt(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Disconnect(); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Run("stalled libvirt hits the limit", func(t *testing.T) {
+		useGuestDialer(t, pipeDialer{}, 50*time.Millisecond)
+		if _, err := dialLibvirt(context.Background()); err == nil {
+			t.Error("want error")
+		}
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		useGuestDialer(t, pipeDialer{}, time.Minute)
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(50*time.Millisecond, cancel)
+		if _, err := dialLibvirt(ctx); err == nil {
+			t.Error("want error")
+		}
+	})
+	t.Run("dial error", func(t *testing.T) {
+		useGuestDialer(t, pipeDialer{err: errors.New("no socket")}, time.Minute)
+		if _, err := dialLibvirt(context.Background()); err == nil {
+			t.Error("want error")
+		}
+	})
+}
+
+func TestClosingDialerClosedBeforeDial(t *testing.T) {
+	d := &closingDialer{Dialer: pipeDialer{}}
+	d.close()
+	if _, err := d.Dial(); err == nil {
+		t.Error("want error after close")
 	}
 }
