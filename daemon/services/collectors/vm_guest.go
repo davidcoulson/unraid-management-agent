@@ -413,6 +413,9 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 		for _, c := range p.cfg.Sensors {
 			if c.VM == s.VM && c.Name != s.Name {
 				reserved[c.Name] = true
+				for _, n := range p.jsonNames[c.VM+"/"+c.Name] {
+					reserved[n] = true
+				}
 			}
 		}
 		var err error

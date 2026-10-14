@@ -826,3 +826,48 @@ func TestVMGuestPoller_JSONSensorOtherVMUntouched(t *testing.T) {
 		}
 	}
 }
+
+func TestVMGuestPoller_JSONSensorNamesNotShared(t *testing.T) {
+	fastGuestExec(t)
+	gpu := domain.VMGuestSensorConfig{VM: "Windows 11", Name: "gpu", Command: []string{"gpu.ps1"}, Interval: 5, JSON: true}
+	gpuCore := domain.VMGuestSensorConfig{VM: "Windows 11", Name: "gpu_core", Command: []string{"core.ps1"}, Interval: 5, JSON: true}
+	for _, order := range [][]domain.VMGuestSensorConfig{{gpu, gpuCore}, {gpuCore, gpu}} {
+		f := windowsGuest()
+		f.programs["gpu.ps1"] = fakeGuestProgram{out: `{"core_temp":80,"load":5}`}
+		f.programs["core.ps1"] = fakeGuestProgram{out: `{"temp":40}`}
+		p, sub := testPoller(f, gpu, gpuCore)
+		for _, s := range order {
+			p.runSensor(context.Background(), s)
+			nextGuestUpdate(t, sub)
+		}
+		// The sensor that ran first owns gpu_core_temp; the other cannot touch it.
+		first := order[0]
+		want := "40"
+		if first.Name == "gpu" {
+			want = "80"
+		}
+		info := p.infos["Windows 11"]
+		count := 0
+		for _, s := range info.Sensors {
+			if s.Name == "gpu_core_temp" {
+				count++
+				if s.Value == nil || *s.Value != want {
+					t.Errorf("first %s: gpu_core_temp = %v, want %s", first.Name, s.Value, want)
+				}
+			}
+		}
+		if count != 1 {
+			t.Errorf("first %s: gpu_core_temp listed %d times", first.Name, count)
+		}
+
+		// A failing run of the other sensor leaves the owner's reading alone.
+		other := order[1]
+		f.programs[other.Command[0]] = fakeGuestProgram{out: `nope`}
+		p.runSensor(context.Background(), other)
+		for _, s := range nextGuestUpdate(t, sub).Sensors {
+			if s.Name == "gpu_core_temp" && (s.Value == nil || *s.Value != want) {
+				t.Errorf("first %s: after failure gpu_core_temp = %v, want %s", first.Name, s.Value, want)
+			}
+		}
+	}
+}
