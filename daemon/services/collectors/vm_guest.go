@@ -95,8 +95,10 @@ type watchedConn struct {
 	done chan struct{}
 }
 
+// Disconnect stops the watchdog only after the close RPC returns, since that
+// RPC can stall too.
 func (c *watchedConn) Disconnect() error {
-	close(c.done)
+	defer close(c.done)
 	return c.Libvirt.Disconnect()
 }
 
@@ -422,7 +424,10 @@ func (p *vmGuestPoller) exec(conn guestConn, dom libvirt.Domain, key, path strin
 	p.mu.Unlock()
 	if busy {
 		st, err := execStatus(conn, dom, pid)
-		if err == nil && !st.Exited {
+		switch {
+		case err != nil && !unknownGuestPID(err):
+			return "", fmt.Errorf("previous run: %w", err)
+		case err == nil && !st.Exited:
 			return "", errors.New("previous run is still running")
 		}
 		// Exited (and now reaped), or unknown to a guest that restarted.
@@ -455,6 +460,15 @@ func (p *vmGuestPoller) exec(conn guestConn, dom libvirt.Domain, key, path strin
 		}
 		time.Sleep(guestExecPoll)
 	}
+}
+
+// unknownGuestPID reports whether guest-exec-status failed because the guest
+// agent does not know the PID, as after a guest restart. qemu-ga says "PID n
+// does not exist" (the Windows build prints "PID lld does not exist"); older
+// versions say "Invalid parameter 'pid'".
+func unknownGuestPID(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "does not exist") || strings.Contains(msg, "Invalid parameter 'pid'")
 }
 
 // guestExecStatus is the reply to guest-exec-status. A process that ended

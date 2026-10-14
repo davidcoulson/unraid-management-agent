@@ -37,6 +37,7 @@ type fakeGuest struct {
 	badReply  string // command whose reply is not JSON
 	empty     string // command with an empty reply
 	pids      map[int]string
+	statusErr error // returned by guest-exec-status
 }
 
 func (f *fakeGuest) DomainLookupByName(name string) (libvirt.Domain, error) {
@@ -85,6 +86,9 @@ func (f *fakeGuest) QEMUDomainAgentCommand(_ libvirt.Domain, cmd string, _ int32
 		f.pids[pid] = args.Path
 		return libvirt.OptString{`{"return":{"pid":` + itoa(pid) + `}}`}, nil
 	case "guest-exec-status":
+		if f.statusErr != nil {
+			return nil, f.statusErr
+		}
 		var args struct {
 			PID int `json:"pid"`
 		}
@@ -350,6 +354,27 @@ func TestVMGuestExec(t *testing.T) {
 		t.Error("pending PID not cleared")
 	}
 
+	// A failed status check of a pending run keeps it pending; a PID the
+	// guest no longer knows (it restarted) is dropped.
+	f.programs["slow.exe"] = fakeGuestProgram{running: true}
+	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil {
+		t.Fatal("slow again: want timeout")
+	}
+	f.statusErr = errors.New("guest agent is not connected")
+	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil || !strings.HasPrefix(err.Error(), "previous run: ") {
+		t.Errorf("status failure: err = %v", err)
+	}
+	if _, ok := p.pending["k"]; !ok {
+		t.Error("pending PID dropped after a status failure")
+	}
+	f.statusErr = errors.New("guest agent command failed: unable to execute QEMU agent command 'guest-exec-status': PID lld does not exist")
+	f.programs["slow.exe"] = fakeGuestProgram{out: "again"}
+	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil {
+		t.Error("unknown PID then status failure on the new run: want error")
+	}
+	f.statusErr = nil
+	delete(p.pending, "k")
+
 	// A status error mid-run keeps the PID pending.
 	f.empty = "guest-exec-status"
 	if _, err := p.exec(f, dom, "k2", "fps.exe", nil); err == nil {
@@ -366,6 +391,18 @@ func TestVMGuestExec(t *testing.T) {
 	}
 	if _, err := p.exec(f, dom, "k4", "missing.exe", nil); err == nil {
 		t.Error("missing program: want error")
+	}
+}
+
+func TestUnknownGuestPID(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"unable to execute QEMU agent command 'guest-exec-status': PID lld does not exist":  true,
+		"unable to execute QEMU agent command 'guest-exec-status': Invalid parameter 'pid'": true,
+		"Guest agent is not responding": false,
+	} {
+		if got := unknownGuestPID(errors.New(msg)); got != want {
+			t.Errorf("unknownGuestPID(%q) = %v, want %v", msg, got, want)
+		}
 	}
 }
 
