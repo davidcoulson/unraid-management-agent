@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -611,6 +612,7 @@ func TestExpandJSONSensor(t *testing.T) {
 		name     string
 		out      string
 		reserved map[string]bool
+		attrs    map[string]string
 		want     []jsonSensorValue
 		wantErr  bool
 	}{
@@ -618,48 +620,62 @@ func TestExpandJSONSensor(t *testing.T) {
 			name: "frames example, keys sorted",
 			out:  `{"avg":98.4,"low5":91,"low1":82,"worst":66,"graph":"82|10.4,10.0"}`,
 			want: []jsonSensorValue{
-				{"frames_avg", strp("98.4")}, {"frames_graph", strp("82|10.4,10.0")},
-				{"frames_low1", strp("82")}, {"frames_low5", strp("91")}, {"frames_worst", strp("66")},
+				{"frames_avg", strp("98.4"), nil}, {"frames_graph", strp("82|10.4,10.0"), nil},
+				{"frames_low1", strp("82"), nil}, {"frames_low5", strp("91"), nil}, {"frames_worst", strp("66"), nil},
 			},
 		},
 		{
 			name: "numbers without exponent noise",
 			out:  `{"a":1e3,"b":0.5,"c":-2,"d":1.50,"e":12345678901234567890,"f":9007199254740993,"g":1.5E-3,"h":-1.25e1,"i":2e+2,"j":-0,"k":0.000,"l":123.456e-2,"m":1e-3}`,
 			want: []jsonSensorValue{
-				{"frames_a", strp("1000")}, {"frames_b", strp("0.5")}, {"frames_c", strp("-2")},
-				{"frames_d", strp("1.5")}, {"frames_e", strp("12345678901234567890")},
-				{"frames_f", strp("9007199254740993")}, {"frames_g", strp("0.0015")}, {"frames_h", strp("-12.5")},
-				{"frames_i", strp("200")}, {"frames_j", strp("0")}, {"frames_k", strp("0")},
-				{"frames_l", strp("1.23456")}, {"frames_m", strp("0.001")},
+				{"frames_a", strp("1000"), nil}, {"frames_b", strp("0.5"), nil}, {"frames_c", strp("-2"), nil},
+				{"frames_d", strp("1.5"), nil}, {"frames_e", strp("12345678901234567890"), nil},
+				{"frames_f", strp("9007199254740993"), nil}, {"frames_g", strp("0.0015"), nil}, {"frames_h", strp("-12.5"), nil},
+				{"frames_i", strp("200"), nil}, {"frames_j", strp("0"), nil}, {"frames_k", strp("0"), nil},
+				{"frames_l", strp("1.23456"), nil}, {"frames_m", strp("0.001"), nil},
 			},
 		},
 		{
 			name: "string, bool and null",
 			out:  `{"s":" hi ","t":true,"f":false,"n":null}`,
 			want: []jsonSensorValue{
-				{"frames_f", strp("false")}, {"frames_n", nil}, {"frames_s", strp(" hi ")}, {"frames_t", strp("true")},
+				{"frames_f", strp("false"), nil}, {"frames_n", nil, nil}, {"frames_s", strp(" hi "), nil}, {"frames_t", strp("true"), nil},
 			},
 		},
 		{
 			name: "nested values skipped",
 			out:  `{"obj":{"a":1},"arr":[1,2],"ok":1}`,
-			want: []jsonSensorValue{{"frames_ok", strp("1")}},
+			want: []jsonSensorValue{{"frames_ok", strp("1"), nil}},
 		},
 		{
 			name: "number out of range skipped",
 			out:  `{"big":1e999,"small":1e-999,"huge":1e99999999999999999999,"ok":1}`,
-			want: []jsonSensorValue{{"frames_ok", strp("1")}},
+			want: []jsonSensorValue{{"frames_ok", strp("1"), nil}},
 		},
 		{
 			name:     "keys sanitised, empty key and name clashes skipped",
 			out:      `{"Low 5%":1,"":2,"low_5_":3,"LOW_5_":4,"taken":5}`,
 			reserved: map[string]bool{"frames_taken": true},
-			want:     []jsonSensorValue{{"frames_low_5_", strp("4")}},
+			want:     []jsonSensorValue{{"frames_low_5_", strp("4"), nil}},
 		},
 		{
 			name: "key too long skipped",
 			out:  `{"` + strings.Repeat("k", 70) + `":1,"ok":2}`,
-			want: []jsonSensorValue{{"frames_ok", strp("2")}},
+			want: []jsonSensorValue{{"frames_ok", strp("2"), nil}},
+		},
+		{
+			name:  "attributes attach to target and are not sensors",
+			out:   `{"avg":98.4,"graph":"82|10","unit":"fps","gone":1}`,
+			attrs: map[string]string{"graph": "avg", "unit": "avg", "miss": "avg", "gone": "nowhere"},
+			want: []jsonSensorValue{
+				{"frames_avg", strp("98.4"), map[string]*string{"graph": strp("82|10"), "unit": strp("fps"), "miss": nil}},
+			},
+		},
+		{
+			name:  "attribute values nested or null are nil",
+			out:   `{"avg":1,"a":null,"b":{"x":1}}`,
+			attrs: map[string]string{"a": "avg", "b": "avg"},
+			want:  []jsonSensorValue{{"frames_avg", strp("1"), map[string]*string{"a": nil, "b": nil}}},
 		},
 		{name: "empty object", out: `{}`},
 		{name: "invalid JSON", out: `{"a":`, wantErr: true},
@@ -671,7 +687,7 @@ func TestExpandJSONSensor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := expandJSONSensor("frames", tt.out, tt.reserved)
+			got, err := expandJSONSensor("frames", tt.out, tt.reserved, tt.attrs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -682,6 +698,9 @@ func TestExpandJSONSensor(t *testing.T) {
 				w := tt.want[i]
 				if got[i].name != w.name || (got[i].value == nil) != (w.value == nil) || (w.value != nil && *got[i].value != *w.value) {
 					t.Errorf("[%d] got %s=%v, want %s=%v", i, got[i].name, got[i].value, w.name, w.value)
+				}
+				if !reflect.DeepEqual(got[i].attributes, w.attributes) {
+					t.Errorf("[%d] attributes = %v, want %v", i, got[i].attributes, w.attributes)
 				}
 			}
 		})
@@ -745,6 +764,42 @@ func TestVMGuestPoller_JSONSensor(t *testing.T) {
 	}
 	if v := sensorValues(info.Sensors); v["frames_avg"] != "50" || v["frames_extra"] != "x" {
 		t.Errorf("values = %v", v)
+	}
+}
+
+func TestNormalizedAttributes(t *testing.T) {
+	if normalizedAttributes(nil) != nil {
+		t.Error("want nil for no attributes")
+	}
+	got := normalizedAttributes(map[string]string{"Low 5%": "AVG"})
+	if !reflect.DeepEqual(got, map[string]string{"low_5_": "avg"}) {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestVMGuestPoller_JSONSensorAttributes(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":98.4,"graph":"82|10"}`}
+	s := framesSensor
+	s.Attributes = map[string]string{"graph": "avg"}
+	p, sub := testPoller(f, s)
+
+	p.runSensor(context.Background(), s)
+	info := nextGuestUpdate(t, sub)
+	if got := sensorNames(info.Sensors); got != "frames_avg" {
+		t.Fatalf("names = %s", got)
+	}
+	if a := info.Sensors[0].Attributes; len(a) != 1 || a["graph"] == nil || *a["graph"] != "82|10" {
+		t.Errorf("attributes = %v", a)
+	}
+
+	// A failed run keeps the attribute with a nil value.
+	f.programs["frames.ps1"] = fakeGuestProgram{exitCode: 1}
+	p.runSensor(context.Background(), s)
+	info = nextGuestUpdate(t, sub)
+	if a, ok := info.Sensors[0].Attributes["graph"]; !ok || a != nil || info.Sensors[0].Value != nil {
+		t.Errorf("sensor = %+v", info.Sensors[0])
 	}
 }
 

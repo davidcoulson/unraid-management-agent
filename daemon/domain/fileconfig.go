@@ -89,6 +89,9 @@ type FileConfigVMGuestSensor struct {
 	Interval int      `yaml:"interval,omitempty"`
 	// JSON expands a flat JSON object on standard output into one sensor per key.
 	JSON bool `yaml:"json,omitempty"`
+	// Attributes maps a JSON key to the key whose sensor gets it as an
+	// attribute instead of a sensor of its own. Only valid with json: true.
+	Attributes map[string]string `yaml:"attributes,omitempty"`
 }
 
 // FileConfigMQTT holds MQTT-specific settings from the config file.

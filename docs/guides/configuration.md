@@ -365,6 +365,13 @@ as they are, booleans as `true`/`false` and `null` as a `null` value; nested obj
 arrays are skipped. Sensors are listed in config order, then keys sorted. Output that is not
 a JSON object counts as a failed run: the keys seen so far stay listed with `null` values.
 
+`attributes` (only with `json: true`) maps a JSON key to the key whose sensor gets it as an
+attribute instead of a sensor of its own; `attributes: {graph: avg}` reports `frames_graph`'s
+value as attribute `graph` of sensor `frames_avg`. Both sides are normalised like sensor
+keys. An attribute whose key is missing or fails is `null`; if the target key is missing, the
+attributes are left out for that run. Empty names, or a target that is itself an attribute
+key, skip the sensor with a log message.
+
 Results are at `GET /api/v1/vm/guest` and in the `vm_guest_update` WebSocket event.
 While a VM is off, or its guest agent is not answering, its GPUs, disks, filesystems
 and sensors stay listed with `null` readings, so Home Assistant shows them as unknown
@@ -387,11 +394,13 @@ vm_guest_agent:
         - Bypass
         - -File
         - C:\ProgramData\Scripts\fps.ps1
-    # frames.ps1 prints {"avg":98.4,"low5":91,"low1":82} -> sensors frames_avg,
-    # frames_low5 and frames_low1
+    # frames.ps1 prints {"avg":98.4,"low5":91,"low1":82,"graph":"82|10"} -> sensors
+    # frames_avg (with attribute graph), frames_low5 and frames_low1
     - vm: "Windows 11"
       name: frames
       json: true
+      attributes:
+        graph: avg
       interval: 5
       command:
         - C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe

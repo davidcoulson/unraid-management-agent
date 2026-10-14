@@ -185,6 +185,12 @@ func TestBuildVMGuestConfig(t *testing.T) {
 				{VM: "Windows 11", Name: "Bad Name", Command: ps},
 				{VM: "Windows 11", Name: "empty"},
 				{VM: "Windows 11", Name: "blank", Command: []string{""}},
+				{VM: "Windows 11", Name: "plainattr", Command: ps, Attributes: map[string]string{"a": "b"}},
+				{VM: "Windows 11", Name: "emptykey", Command: ps, JSON: true, Attributes: map[string]string{" ": "b"}},
+				{VM: "Windows 11", Name: "emptytarget", Command: ps, JSON: true, Attributes: map[string]string{"a": ""}},
+				{VM: "Windows 11", Name: "chain", Command: ps, JSON: true, Attributes: map[string]string{"a": "b", "b": "c"}},
+				{VM: "Windows 11", Name: "selfattr", Command: ps, JSON: true, Attributes: map[string]string{"a": "a"}},
+				{VM: "Windows 11", Name: "okattr", Command: ps, JSON: true, Attributes: map[string]string{"graph": "avg"}},
 			},
 		})
 		if got.Interval != vmGuestMinInterval {
@@ -194,6 +200,7 @@ func TestBuildVMGuestConfig(t *testing.T) {
 			{VM: "Windows 11", Name: "fps", Command: ps, Interval: vmGuestMinSensorSecs},
 			{VM: "Windows 11", Name: "game", Command: ps, Interval: vmGuestDefaultInterval, JSON: true},
 			{VM: "Windows 11", Name: "gamer", Command: ps, Interval: vmGuestDefaultInterval},
+			{VM: "Windows 11", Name: "okattr", Command: ps, Interval: vmGuestDefaultInterval, JSON: true, Attributes: map[string]string{"graph": "avg"}},
 		}
 		if !reflect.DeepEqual(got.Sensors, want) {
 			t.Errorf("Sensors = %+v, want %+v", got.Sensors, want)

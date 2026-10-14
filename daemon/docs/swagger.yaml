@@ -5124,6 +5124,12 @@ definitions:
     type: object
   dto.VMGuestSensor:
     properties:
+      attributes:
+        additionalProperties:
+          type: string
+        description: 'Attributes are extra values of a json: true sensor, by JSON
+          key.'
+        type: object
       error:
         example: exit code 1
         type: string

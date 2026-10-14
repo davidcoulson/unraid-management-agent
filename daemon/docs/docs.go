@@ -12727,6 +12727,13 @@ const docTemplate = `{
         "dto.VMGuestSensor": {
             "type": "object",
             "properties": {
+                "attributes": {
+                    "description": "Attributes are extra values of a json: true sensor, by JSON key.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "error": {
                     "type": "string",
                     "example": "exit code 1"

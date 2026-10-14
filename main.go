@@ -617,6 +617,10 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 			logger.Warning("vm_guest_agent: skipping duplicate sensor %q for VM %q", s.Name, s.VM)
 		case len(s.Command) == 0 || s.Command[0] == "":
 			logger.Warning("vm_guest_agent: skipping sensor %q: command is empty", s.Name)
+		case len(s.Attributes) > 0 && !s.JSON:
+			logger.Warning("vm_guest_agent: skipping sensor %q: attributes need json: true", s.Name)
+		case !validSensorAttributes(s.Attributes):
+			logger.Warning("vm_guest_agent: skipping sensor %q: attributes must map non-empty keys to other keys that are not attributes themselves", s.Name)
 		default:
 			seen[key] = true
 			interval := s.Interval
@@ -624,16 +628,31 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 				interval = vmGuestDefaultInterval
 			}
 			cfg.Sensors = append(cfg.Sensors, domain.VMGuestSensorConfig{
-				VM:       s.VM,
-				Name:     s.Name,
-				Command:  s.Command,
-				Interval: max(interval, vmGuestMinSensorSecs),
-				JSON:     s.JSON,
+				VM:         s.VM,
+				Name:       s.Name,
+				Command:    s.Command,
+				Interval:   max(interval, vmGuestMinSensorSecs),
+				JSON:       s.JSON,
+				Attributes: s.Attributes,
 			})
 		}
 	}
 	cfg.Sensors = dropAmbiguousJSONSensors(cfg.Sensors)
 	return cfg
+}
+
+// validSensorAttributes reports whether every attribute key and target is
+// non-empty and no target is itself an attribute key.
+func validSensorAttributes(attributes map[string]string) bool {
+	for k, target := range attributes {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(target) == "" {
+			return false
+		}
+		if _, isAttr := attributes[target]; isAttr {
+			return false
+		}
+	}
+	return true
 }
 
 // dropAmbiguousJSONSensors skips a sensor whose name starts with the name of a

@@ -99,6 +99,10 @@ type VMGuestSensorConfig struct {
 	// JSON expands a flat JSON object on standard output into one sensor per
 	// key, named <Name>_<key>.
 	JSON bool `json:"json,omitempty"`
+	// Attributes turns keys of the JSON object into attributes of another key's
+	// sensor instead of sensors of their own: the map key is the JSON key, the
+	// value is the key whose sensor gets the attribute. Only valid with JSON.
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // ToolPolicyValue defines the access policy for an individual MCP tool.

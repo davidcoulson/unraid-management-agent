@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `null` readings, so consumers can show them as unknown rather than unavailable. A custom sensor
   with `json: true` expands a flat JSON object printed by its command into one sensor per key,
   named `<name>_<key>` (for example `frames_avg`); output that is not a JSON object counts as a
-  failed run and the known keys stay listed with `null` values.
+  failed run and the known keys stay listed with `null` values. `attributes` (for example
+  `graph: avg`) turns a key into an attribute of another key's sensor instead of a sensor of its own.
 - **UPS telemetry: voltages, frequency, temperature, transfers and self-test** — `/api/v1/ups`
   (and the `ups_status_update` event) now reports `input_voltage`, `output_voltage`,
   `battery_voltage`, `line_frequency`, `temperature_celsius`, `time_on_battery_seconds`,

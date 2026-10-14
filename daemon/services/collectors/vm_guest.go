@@ -422,7 +422,7 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 			}
 		}
 		var err error
-		if fresh, err = expandJSONSensor(s.Name, *out, reserved); err != nil {
+		if fresh, err = expandJSONSensor(s.Name, *out, reserved, normalizedAttributes(s.Attributes)); err != nil {
 			errMsg = err.Error()
 		} else {
 			names := make([]string, len(fresh))
@@ -443,12 +443,19 @@ func (p *vmGuestPoller) setJSONSensors(s domain.VMGuestSensorConfig, out *string
 		p.jsonFailing[key] = failing
 	}
 	for _, v := range fresh {
-		old[v.name] = dto.VMGuestSensor{Name: v.name, Value: v.value, UpdatedAt: &now}
+		old[v.name] = dto.VMGuestSensor{Name: v.name, Value: v.value, Attributes: v.attributes, UpdatedAt: &now}
 	}
 	for _, name := range p.jsonNames[key] {
 		if out == nil || errMsg != "" {
 			sensor := old[name]
 			sensor.Value, sensor.Error = nil, errMsg
+			if sensor.Attributes != nil {
+				attrs := make(map[string]*string, len(sensor.Attributes))
+				for k := range sensor.Attributes {
+					attrs[k] = nil
+				}
+				sensor.Attributes = attrs
+			}
 			old[name] = sensor
 		}
 	}
@@ -506,13 +513,27 @@ func plainDecimal(lit string) (string, bool) {
 
 // jsonSensorValue is one key of a JSON sensor's output.
 type jsonSensorValue struct {
-	name  string
-	value *string
+	name       string
+	value      *string
+	attributes map[string]*string
 }
 
 var vmGuestSensorNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 
 var jsonSensorKeyRegex = regexp.MustCompile(`[^a-z0-9_]`)
+
+// normalizedAttributes applies the key normalisation of expandJSONSensor to
+// both sides of a sensor's attributes map.
+func normalizedAttributes(attributes map[string]string) map[string]string {
+	if len(attributes) == 0 {
+		return nil
+	}
+	norm := make(map[string]string, len(attributes))
+	for k, v := range attributes {
+		norm[jsonSensorKeyRegex.ReplaceAllString(strings.ToLower(k), "_")] = jsonSensorKeyRegex.ReplaceAllString(strings.ToLower(v), "_")
+	}
+	return norm
+}
 
 // expandJSONSensor turns a flat JSON object into one value per key, named
 // <name>_<key> and sorted by key. Keys are lowercased and any other character
@@ -520,7 +541,11 @@ var jsonSensorKeyRegex = regexp.MustCompile(`[^a-z0-9_]`)
 // empty, longer than 64 characters, already used or in reserved are skipped, as
 // are nested objects and arrays. Numbers are written in plain decimal, strings
 // as they are, booleans as true or false, and null as a nil value.
-func expandJSONSensor(name, out string, reserved map[string]bool) ([]jsonSensorValue, error) {
+//
+// attributes maps a key to the key of the value it becomes an attribute of. An
+// attribute key is not a value of its own, and is nil on its target when it is
+// missing or nested. When the target is missing the attribute is dropped.
+func expandJSONSensor(name, out string, reserved map[string]bool, attributes map[string]string) ([]jsonSensorValue, error) {
 	dec := json.NewDecoder(strings.NewReader(out))
 	dec.UseNumber()
 	var obj map[string]any
@@ -537,10 +562,48 @@ func expandJSONSensor(name, out string, reserved map[string]bool) ([]jsonSensorV
 	}
 	sort.Strings(keys)
 
+	scalar := func(k string) (*string, bool) {
+		switch v := obj[k].(type) {
+		case nil:
+			return nil, true
+		case json.Number:
+			plain, ok := plainDecimal(v.String())
+			if !ok {
+				logger.Debug("VM guest agent: sensor %s: skipping key %q: number %q out of range", name, k, v)
+				return nil, false
+			}
+			return &plain, true
+		case string:
+			return &v, true
+		case bool:
+			s := strconv.FormatBool(v)
+			return &s, true
+		default:
+			logger.Debug("VM guest agent: sensor %s: skipping key %q: nested value", name, k)
+			return nil, false
+		}
+	}
+
+	attrs := make(map[string]map[string]*string)
+	missing := make(map[string]bool)
+	for attr, target := range attributes {
+		if attrs[target] == nil {
+			attrs[target] = make(map[string]*string)
+		}
+		attrs[target][attr] = nil
+		missing[target] = true
+	}
+
 	var values []jsonSensorValue
 	used := make(map[string]bool)
 	for _, k := range keys {
 		suffix := jsonSensorKeyRegex.ReplaceAllString(strings.ToLower(k), "_")
+		if target, ok := attributes[suffix]; ok {
+			if v, ok := scalar(k); ok {
+				attrs[target][suffix] = v
+			}
+			continue
+		}
 		full := name + "_" + suffix
 		switch {
 		case suffix == "" || !vmGuestSensorNamePattern.MatchString(full):
@@ -550,27 +613,16 @@ func expandJSONSensor(name, out string, reserved map[string]bool) ([]jsonSensorV
 			logger.Warning("VM guest agent: sensor %s: skipping key %q: name %q is already used", name, k, full)
 			continue
 		}
-		var value *string
-		switch v := obj[k].(type) {
-		case nil:
-		case json.Number:
-			plain, ok := plainDecimal(v.String())
-			if !ok {
-				logger.Debug("VM guest agent: sensor %s: skipping key %q: number %q out of range", name, k, v)
-				continue
-			}
-			value = &plain
-		case string:
-			value = &v
-		case bool:
-			s := strconv.FormatBool(v)
-			value = &s
-		default:
-			logger.Debug("VM guest agent: sensor %s: skipping key %q: nested value", name, k)
+		value, ok := scalar(k)
+		if !ok {
 			continue
 		}
 		used[full] = true
-		values = append(values, jsonSensorValue{name: full, value: value})
+		values = append(values, jsonSensorValue{name: full, value: value, attributes: attrs[suffix]})
+		delete(missing, suffix)
+	}
+	for target := range missing {
+		logger.Debug("VM guest agent: sensor %s: dropping attributes: target key %q is missing", name, target)
 	}
 	return values, nil
 }
