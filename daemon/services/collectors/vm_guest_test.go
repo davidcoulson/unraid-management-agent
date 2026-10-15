@@ -961,3 +961,39 @@ func TestVMGuestPoller_JSONSensorFailsBeforeFirstGoodRun(t *testing.T) {
 		t.Errorf("after recovery: sensors = %s, failing = %v", got, p.jsonFailing["Windows 11/frames"])
 	}
 }
+
+// A sensor result that arrives after the VM was set offline is dropped, so it
+// cannot restore readings the offline update cleared.
+func TestVMGuestPoller_SensorResultAfterOfflineDropped(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	f.programs["frames.ps1"] = fakeGuestProgram{out: `{"avg":98.4,"graph":"82|10"}`}
+	s := framesSensor
+	s.Attributes = map[string]string{"graph": "avg"}
+	p, sub := testPoller(f, s, fpsSensor)
+	p.runSensor(context.Background(), s)
+	nextGuestUpdate(t, sub)
+
+	// The VM goes offline while each run is under way.
+	p.dial = func(context.Context) (guestConn, error) {
+		p.setOffline("Windows 11", false, "")
+		return f, nil
+	}
+	info := p.infos["Windows 11"]
+	for _, run := range []domain.VMGuestSensorConfig{s, fpsSensor} {
+		p.runSensor(context.Background(), run)
+		for _, sensor := range info.Sensors {
+			if sensor.Value != nil {
+				t.Errorf("after %s ran: sensor %s = %q", run.Name, sensor.Name, *sensor.Value)
+			}
+			for k, v := range sensor.Attributes {
+				if v != nil {
+					t.Errorf("after %s ran: attribute %s = %q", run.Name, k, *v)
+				}
+			}
+		}
+	}
+	if info.AgentConnected {
+		t.Error("agent connected after the VM went offline")
+	}
+}

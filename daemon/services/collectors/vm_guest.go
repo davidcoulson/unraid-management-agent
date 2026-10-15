@@ -148,10 +148,14 @@ type vmGuestPoller struct {
 	// jsonFailing marks the JSON sensors whose last run failed, by VM and
 	// sensor, so a failure is logged once rather than on every run.
 	jsonFailing map[string]bool
+	// offlineGen counts, by VM, the times the VM was set offline. A sensor
+	// run drops its result if the count changed while it ran, so a reply
+	// that arrives late cannot restore readings after the VM went offline.
+	offlineGen map[string]uint64
 }
 
 func newVMGuestPoller(cfg domain.VMGuestConfig, hub *domain.EventBus) *vmGuestPoller {
-	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo), pending: make(map[string]int), jsonNames: make(map[string][]string), jsonFailing: make(map[string]bool)}
+	p := &vmGuestPoller{cfg: cfg, hub: hub, dial: dialLibvirt, infos: make(map[string]*dto.VMGuestInfo), pending: make(map[string]int), jsonNames: make(map[string][]string), jsonFailing: make(map[string]bool), offlineGen: make(map[string]uint64)}
 	for _, vm := range cfg.VMs {
 		p.infos[vm] = &dto.VMGuestInfo{
 			VMName:      vm,
@@ -353,6 +357,7 @@ func nilAttributes(attributes map[string]*string) map[string]*string {
 func (p *vmGuestPoller) setOffline(vm string, running bool, msg string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.offlineGen[vm]++
 	info := p.infos[vm]
 	info.Running = running
 	info.AgentConnected = false
@@ -370,6 +375,10 @@ func (p *vmGuestPoller) setOffline(vm string, running bool, msg string) {
 
 // runSensor runs one custom sensor command and publishes the result.
 func (p *vmGuestPoller) runSensor(ctx context.Context, s domain.VMGuestSensorConfig) {
+	p.mu.Lock()
+	gen := p.offlineGen[s.VM]
+	p.mu.Unlock()
+
 	var out *string
 	errMsg := ""
 	conn, err := p.dial(ctx)
@@ -395,6 +404,11 @@ func (p *vmGuestPoller) runSensor(ctx context.Context, s domain.VMGuestSensorCon
 
 	now := time.Now()
 	p.mu.Lock()
+	if p.offlineGen[s.VM] != gen {
+		// The VM went offline while this ran; its readings stay cleared.
+		p.mu.Unlock()
+		return
+	}
 	if s.JSON {
 		p.setJSONSensors(s, out, errMsg, now)
 	} else {
