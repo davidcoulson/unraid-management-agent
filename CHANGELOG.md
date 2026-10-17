@@ -9,9 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fan control status interval now defaults to 60 s (was 5 s)** (#277) — the collector only
+  publishes status; the fan curve engine keeps its own poll interval.
+
 ### Added
 
-- **Seven more collector intervals on the plugin settings page** — `INTERVAL_FAN_CONTROL` (5 s),
+- **Seven more collector intervals on the plugin settings page** — `INTERVAL_FAN_CONTROL` (60 s),
   `INTERVAL_TUNING` (120 s), `INTERVAL_DOCKER_UPDATE` (6 h), `INTERVAL_DOCKER_NETWORKS` (60 s),
   `INTERVAL_PLUGIN_UPDATE` (1 h), `INTERVAL_OS_UPDATE` (24 h) and `INTERVAL_MOVER` (30 s) are now in
   `default.cfg`, the first-install config, the start script (default, validation and passthrough

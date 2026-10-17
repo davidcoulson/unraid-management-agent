@@ -150,8 +150,9 @@ const (
 	// IntervalUnassigned is the collection interval for unassigned devices in seconds.
 	IntervalUnassigned = 60
 	// IntervalFanControl is the collection interval for fan control status in seconds.
-	// Shorter interval for responsive fan monitoring (5s matches typical fan curve evaluation).
-	IntervalFanControl = 5
+	// The collector only publishes status; the fan curve engine runs on its own
+	// PollInterval (controllers/fan_config.go), so 60s here does not slow fan control.
+	IntervalFanControl = 60
 	// IntervalTuning is the collection interval for system tuning parameters in seconds.
 	// Kernel parameters rarely change; 120s is sufficient.
 	IntervalTuning = 120
