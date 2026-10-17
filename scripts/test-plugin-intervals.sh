@@ -73,3 +73,65 @@ eval "$(grep '^sanitize_int()' "$START")"
 [ "$(sanitize_int '60')" = "60" ] || fail "sanitize_int changed a valid value"
 [ "$(sanitize_int '5; rm -rf /')" = "5" ] || fail "sanitize_int kept non-digits"
 echo "✓ sanitize_int strips everything but digits"
+
+# ── Run the start script against a fake daemon ────────────────
+# The script is copied with its config, binary and plugin paths pointed into a
+# temp directory; killall is stubbed and the fake daemon writes its environment.
+SANDBOX=$(mktemp -d)
+trap 'rm -rf "$SANDBOX"' EXIT
+mkdir -p "$SANDBOX/scripts" "$SANDBOX/bin" "$SANDBOX/config"
+sed -e "s|^CONFIG_FILE=.*|CONFIG_FILE=\"$SANDBOX/config/config.cfg\"|" \
+    -e "s|^PROG=.*|PROG=\"$SANDBOX/bin/daemon\"|" \
+    -e "s|^mkdir -p \"/boot/config/plugins/\$PLUGIN\"|mkdir -p \"$SANDBOX/config\"|" \
+    "$START" >"$SANDBOX/scripts/start"
+cp "${REPO_ROOT}/meta/plugin/scripts/auto-intervals" "$SANDBOX/scripts/"
+grep -q "^CONFIG_FILE=\"$SANDBOX" "$SANDBOX/scripts/start" || fail "could not redirect CONFIG_FILE in the start script copy"
+grep -q "^PROG=\"$SANDBOX" "$SANDBOX/scripts/start" || fail "could not redirect PROG in the start script copy"
+printf '#!/bin/sh\nexit 0\n' >"$SANDBOX/bin/killall"
+printf '#!/bin/sh\nenv >"%s/env.out"\n' "$SANDBOX" >"$SANDBOX/bin/daemon"
+chmod +x "$SANDBOX/bin/killall" "$SANDBOX/bin/daemon"
+
+# Runs the start script with config.cfg content $1 and prints the daemon's
+# value of env var $2 for each remaining argument.
+run_start() {
+    local cfg="$1" i
+    shift
+    printf '%s\n' "$cfg" >"$SANDBOX/config/config.cfg"
+    rm -f "$SANDBOX/env.out"
+    PATH="$SANDBOX/bin:$PATH" bash "$SANDBOX/scripts/start" >/dev/null
+    for i in $(seq 1 50); do
+        [ -s "$SANDBOX/env.out" ] && break
+        sleep 0.1
+    done
+    [ -s "$SANDBOX/env.out" ] || fail "the start script did not launch the daemon"
+    for var in "$@"; do
+        sed -n "s/^$var=//p" "$SANDBOX/env.out"
+    done
+}
+
+# Unset: every interval reaches the daemon with its default.
+for var in "${INTERVALS[@]}"; do
+    got=$(run_start 'PORT="8043"' "$var")
+    [ "$got" = "$(daemon_default "$var")" ] || fail "$var unset: daemon got '$got', want '$(daemon_default "$var")'"
+done
+echo "✓ unset intervals reach the daemon with their defaults"
+
+# Configured: custom values, including Disabled (0), reach the daemon unchanged.
+cfg='PORT="8043"'
+i=0
+for var in "${INTERVALS[@]}"; do
+    cfg+=$'\n'"$var=\"$((i * 7))\""
+    i=$((i + 1))
+done
+i=0
+for var in "${INTERVALS[@]}"; do
+    got=$(run_start "$cfg" "$var")
+    [ "$got" = "$((i * 7))" ] || fail "$var configured as $((i * 7)): daemon got '$got'"
+    i=$((i + 1))
+done
+echo "✓ configured intervals, including 0 (Disabled), reach the daemon unchanged"
+
+# Invalid: non-digits are stripped before the value reaches the daemon.
+got=$(run_start $'PORT="8043"\nINTERVAL_FAN_CONTROL="15s"\nINTERVAL_MOVER="30;reboot"' INTERVAL_FAN_CONTROL INTERVAL_MOVER | paste -sd, -)
+[ "$got" = "15,30" ] || fail "invalid intervals: daemon got '$got', want '15,30'"
+echo "✓ non-digit characters are stripped from configured intervals"

@@ -6,27 +6,28 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const BASE = 'http://uma.test';
-const PAGE_HTML = path.join(__dirname, '..', '.render', 'page.html');
+const RENDER = path.join(__dirname, '..', '.render');
 const JQUERY = path.join(__dirname, '..', 'node_modules', 'jquery', 'dist', 'jquery.min.js');
 
-// Select name, row label, the daemon default (main.go) and an option list value.
+// Select name, row label, the daemon default (main.go), the value set in the
+// test config.cfg (global-setup.js) and an option list value.
 const INTERVALS = [
-  { name: 'INTERVAL_FAN_CONTROL', label: 'Fan Control', def: '5', fastest: '5' },
-  { name: 'INTERVAL_TUNING', label: 'Tuning Parameters', def: '120', fastest: '10' },
-  { name: 'INTERVAL_DOCKER_UPDATE', label: 'Docker Update Checks', def: '21600', fastest: '10' },
-  { name: 'INTERVAL_DOCKER_NETWORKS', label: 'Docker Networks', def: '60', fastest: '10' },
-  { name: 'INTERVAL_PLUGIN_UPDATE', label: 'Plugin Update Checks', def: '3600', fastest: '10' },
-  { name: 'INTERVAL_OS_UPDATE', label: 'OS Update Checks', def: '86400', fastest: null },
-  { name: 'INTERVAL_MOVER', label: 'Mover Status', def: '30', fastest: '10' },
+  { name: 'INTERVAL_FAN_CONTROL', label: 'Fan Control', def: '5', configured: '60', fastest: '5' },
+  { name: 'INTERVAL_TUNING', label: 'Tuning Parameters', def: '120', configured: '300', fastest: '10' },
+  { name: 'INTERVAL_DOCKER_UPDATE', label: 'Docker Update Checks', def: '21600', configured: '86400', fastest: '10' },
+  { name: 'INTERVAL_DOCKER_NETWORKS', label: 'Docker Networks', def: '60', configured: '0', fastest: '10' },
+  { name: 'INTERVAL_PLUGIN_UPDATE', label: 'Plugin Update Checks', def: '3600', configured: '43200', fastest: '10' },
+  { name: 'INTERVAL_OS_UPDATE', label: 'OS Update Checks', def: '86400', configured: '3600', fastest: null },
+  { name: 'INTERVAL_MOVER', label: 'Mover Status', def: '30', configured: '120', fastest: '10' },
 ];
 
 const json = (body, status = 200) => ({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-async function openPage(page) {
+async function openPage(page, html = 'page.html') {
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/') {
-      return route.fulfill({ contentType: 'text/html', body: fs.readFileSync(PAGE_HTML, 'utf8') });
+      return route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(RENDER, html), 'utf8') });
     }
     if (url.pathname === '/jquery.js') {
       return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(JQUERY, 'utf8') });
@@ -72,5 +73,12 @@ test('new interval values are submitted with the form', async ({ page }) => {
   expect(fields.INTERVAL_MOVER).toBe('0');
   for (const { name, def } of INTERVALS.filter((i) => !['INTERVAL_FAN_CONTROL', 'INTERVAL_MOVER'].includes(i.name))) {
     expect(fields[name], name).toBe(def);
+  }
+});
+
+test('new interval selects show the values saved in config.cfg', async ({ page }) => {
+  await openPage(page, 'page-configured.html');
+  for (const { name, configured } of INTERVALS) {
+    await expect(page.locator(`select[name="${name}"]`), name).toHaveValue(configured);
   }
 });
