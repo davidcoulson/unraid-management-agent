@@ -170,6 +170,10 @@ def identify_event_type(data):
     if "state" in data and "vcpus" in data:
         return "vm_list_update"
 
+    # VM guest agent
+    if "vm_name" in data and "agent_connected" in data:
+        return "vm_guest_update"
+
     # Disk
     if "device" in data and "mount_point" in data:
         return "disk_list_update"

@@ -171,6 +171,16 @@ func TestBuildVMGuestConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("sensor VM names are trimmed like the VM list", func(t *testing.T) {
+		got := buildVMGuestConfig("", &domain.FileConfigVMGuest{
+			VMs:     []string{" Windows 11"},
+			Sensors: []domain.FileConfigVMGuestSensor{{VM: " Windows 11 ", Name: "fps", Command: ps}},
+		})
+		if len(got.Sensors) != 1 || got.Sensors[0].VM != "Windows 11" {
+			t.Errorf("Sensors = %+v", got.Sensors)
+		}
+	})
+
 	t.Run("file with sensors", func(t *testing.T) {
 		got := buildVMGuestConfig("", &domain.FileConfigVMGuest{
 			VMs:      []string{"Windows 11"},

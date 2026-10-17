@@ -374,7 +374,7 @@ key, skip the sensor with a log message.
 
 Results are at `GET /api/v1/vm/guest` and in the `vm_guest_update` WebSocket event.
 While a VM is off, or its guest agent is not answering, its GPUs, disks, filesystems
-and sensors stay listed with `null` readings, so Home Assistant shows them as unknown
+and sensors stay listed with `null` readings, so a consumer can display them as unknown
 rather than unavailable.
 
 Configure it in `config.yml`:

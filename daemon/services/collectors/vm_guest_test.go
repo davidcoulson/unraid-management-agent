@@ -360,17 +360,17 @@ func TestVMGuestExec(t *testing.T) {
 
 	// A run that times out is remembered and not started again while it runs.
 	f.programs["slow.exe"] = fakeGuestProgram{running: true}
-	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if _, err := p.exec(context.Background(), f, dom, "k", "slow.exe", nil); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("slow: err = %v", err)
 	}
-	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil || err.Error() != "previous run is still running" {
+	if _, err := p.exec(context.Background(), f, dom, "k", "slow.exe", nil); err == nil || err.Error() != "previous run is still running" {
 		t.Errorf("still running: err = %v", err)
 	}
 	starts := len(f.pids)
 
 	// Once it exits it is reaped and the next run starts.
 	f.programs["slow.exe"] = fakeGuestProgram{out: "done"}
-	if out, err := p.exec(f, dom, "k", "slow.exe", nil); err != nil || out != "done" || len(f.pids) != starts+1 {
+	if out, err := p.exec(context.Background(), f, dom, "k", "slow.exe", nil); err != nil || out != "done" || len(f.pids) != starts+1 {
 		t.Errorf("after exit: out = %q, err = %v", out, err)
 	}
 	if _, ok := p.pending["k"]; ok {
@@ -380,11 +380,11 @@ func TestVMGuestExec(t *testing.T) {
 	// A failed status check of a pending run keeps it pending; a PID the
 	// guest no longer knows (it restarted) is dropped.
 	f.programs["slow.exe"] = fakeGuestProgram{running: true}
-	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil {
+	if _, err := p.exec(context.Background(), f, dom, "k", "slow.exe", nil); err == nil {
 		t.Fatal("slow again: want timeout")
 	}
 	f.statusErr = errors.New("guest agent is not connected")
-	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil || !strings.HasPrefix(err.Error(), "previous run: ") {
+	if _, err := p.exec(context.Background(), f, dom, "k", "slow.exe", nil); err == nil || !strings.HasPrefix(err.Error(), "previous run: ") {
 		t.Errorf("status failure: err = %v", err)
 	}
 	if _, ok := p.pending["k"]; !ok {
@@ -392,7 +392,7 @@ func TestVMGuestExec(t *testing.T) {
 	}
 	f.statusErr = errors.New("guest agent command failed: unable to execute QEMU agent command 'guest-exec-status': PID lld does not exist")
 	f.programs["slow.exe"] = fakeGuestProgram{out: "again"}
-	if _, err := p.exec(f, dom, "k", "slow.exe", nil); err == nil {
+	if _, err := p.exec(context.Background(), f, dom, "k", "slow.exe", nil); err == nil {
 		t.Error("unknown PID then status failure on the new run: want error")
 	}
 	f.statusErr = nil
@@ -400,7 +400,7 @@ func TestVMGuestExec(t *testing.T) {
 
 	// A status error mid-run keeps the PID pending.
 	f.empty = "guest-exec-status"
-	if _, err := p.exec(f, dom, "k2", "fps.exe", nil); err == nil {
+	if _, err := p.exec(context.Background(), f, dom, "k2", "fps.exe", nil); err == nil {
 		t.Error("empty status reply: want error")
 	}
 	if _, ok := p.pending["k2"]; !ok {
@@ -409,11 +409,31 @@ func TestVMGuestExec(t *testing.T) {
 
 	f.programs["fail.exe"] = fakeGuestProgram{exitCode: 1, stderr: strings.Repeat("x", 300)}
 	f.empty = ""
-	if _, err := p.exec(f, dom, "k3", "fail.exe", nil); err == nil || len(err.Error()) != len("exit code 1: ")+200 {
+	if _, err := p.exec(context.Background(), f, dom, "k3", "fail.exe", nil); err == nil || len(err.Error()) != len("exit code 1: ")+200 {
 		t.Errorf("fail: err = %v", err)
 	}
-	if _, err := p.exec(f, dom, "k4", "missing.exe", nil); err == nil {
+	if _, err := p.exec(context.Background(), f, dom, "k4", "missing.exe", nil); err == nil {
 		t.Error("missing program: want error")
+	}
+}
+
+func TestVMGuestExec_ContextCancelled(t *testing.T) {
+	fastGuestExec(t)
+	f := windowsGuest()
+	p, _ := testPoller(f)
+	dom := libvirt.Domain{Name: "Windows 11"}
+	f.programs["slow.exe"] = fakeGuestProgram{running: true}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.exec(ctx, f, dom, "k", "slow.exe", nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if _, ok := p.pending["k"]; ok {
+		t.Error("PID recorded as pending after cancellation")
+	}
+	if len(f.pids) != 0 {
+		t.Errorf("started %d guest commands after cancellation", len(f.pids))
 	}
 }
 

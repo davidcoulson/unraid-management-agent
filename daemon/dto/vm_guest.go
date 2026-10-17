@@ -24,8 +24,8 @@ type VMGuestInfo struct {
 type VMGuestFilesystem struct {
 	Mountpoint string  `json:"mountpoint" example:"C:\\"`
 	Type       string  `json:"type" example:"NTFS"`
-	TotalBytes *uint64 `json:"total_bytes" example:"1073741819904"`
-	UsedBytes  *uint64 `json:"used_bytes" example:"173512880128"`
+	TotalBytes *uint64 `json:"total_bytes" example:"1073741819904" extensions:"x-nullable"`
+	UsedBytes  *uint64 `json:"used_bytes" example:"173512880128" extensions:"x-nullable"`
 }
 
 // VMGuestGPU is an NVIDIA GPU passed through to the guest, read with nvidia-smi.
@@ -33,13 +33,13 @@ type VMGuestFilesystem struct {
 type VMGuestGPU struct {
 	Index              int      `json:"index" example:"0"`
 	Name               string   `json:"name" example:"NVIDIA GeForce RTX 4090"`
-	TemperatureC       *float64 `json:"temperature_celsius" example:"34"`
-	UtilizationPercent *float64 `json:"utilization_percent" example:"12"`
-	MemoryUsedBytes    *uint64  `json:"memory_used_bytes" example:"13631488"`
-	MemoryTotalBytes   *uint64  `json:"memory_total_bytes" example:"25757220864"`
-	PowerWatts         *float64 `json:"power_watts" example:"63.29"`
-	FanPercent         *float64 `json:"fan_percent" example:"0"`
-	ClockMHz           *float64 `json:"clock_mhz" example:"2535"`
+	TemperatureC       *float64 `json:"temperature_celsius" example:"34" extensions:"x-nullable"`
+	UtilizationPercent *float64 `json:"utilization_percent" example:"12" extensions:"x-nullable"`
+	MemoryUsedBytes    *uint64  `json:"memory_used_bytes" example:"13631488" extensions:"x-nullable"`
+	MemoryTotalBytes   *uint64  `json:"memory_total_bytes" example:"25757220864" extensions:"x-nullable"`
+	PowerWatts         *float64 `json:"power_watts" example:"63.29" extensions:"x-nullable"`
+	FanPercent         *float64 `json:"fan_percent" example:"0" extensions:"x-nullable"`
+	ClockMHz           *float64 `json:"clock_mhz" example:"2535" extensions:"x-nullable"`
 }
 
 // VMGuestDisk is a physical disk seen by a Windows guest, read with
@@ -48,9 +48,9 @@ type VMGuestDisk struct {
 	Model           string   `json:"model" example:"WD_BLACK SN850X 4000GB"`
 	Serial          string   `json:"serial" example:"E823_8FA6_BF53_0001_001B_448B_4EB4_93E5."`
 	Bus             string   `json:"bus" example:"NVMe"`
-	TemperatureC    *float64 `json:"temperature_celsius" example:"35"`
-	TemperatureMaxC *float64 `json:"temperature_max_celsius" example:"90"`
-	WearPercent     *float64 `json:"wear_percent" example:"1"`
+	TemperatureC    *float64 `json:"temperature_celsius" example:"35" extensions:"x-nullable"`
+	TemperatureMaxC *float64 `json:"temperature_max_celsius" example:"90" extensions:"x-nullable"`
+	WearPercent     *float64 `json:"wear_percent" example:"1" extensions:"x-nullable"`
 }
 
 // VMGuestSensor is the output of a custom command configured to run inside the
@@ -61,7 +61,7 @@ type VMGuestDisk struct {
 // the last run failed.
 type VMGuestSensor struct {
 	Name      string     `json:"name" example:"fps"`
-	Value     *string    `json:"value" example:"144"`
+	Value     *string    `json:"value" example:"144" extensions:"x-nullable"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 	Error     string     `json:"error,omitempty" example:"exit code 1"`
 	// Attributes are extra values of a json: true sensor, by JSON key.

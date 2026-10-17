@@ -549,12 +549,6 @@ func isExplicitFlag(dst any) bool {
 	return explicitFlags[reflect.ValueOf(dst).Pointer()]
 }
 
-// applyFileConfig merges config file values into the CLI struct.
-// Only fields not explicitly set via CLI/env are overridden.
-// Kong sets fields to their declared defaults before parsing, so file config
-// values are applied after kong.Parse to fill in non-defaulted values.
-// In practice this means file config acts as a "second default layer":
-// CLI flag > env var > config file > struct default.
 // Limits for the vm_guest_agent settings.
 const (
 	vmGuestDefaultInterval = 30
@@ -609,6 +603,7 @@ func buildVMGuestConfig(cliVMs string, file *domain.FileConfigVMGuest) domain.VM
 
 	seen := make(map[string]bool)
 	for _, s := range file.Sensors {
+		s.VM = strings.TrimSpace(s.VM)
 		key := s.VM + "/" + s.Name
 		switch {
 		case !known[s.VM]:
@@ -695,6 +690,12 @@ outer:
 	return kept
 }
 
+// applyFileConfig merges config file values into the CLI struct.
+// Only fields not explicitly set via CLI/env are overridden.
+// Kong sets fields to their declared defaults before parsing, so file config
+// values are applied after kong.Parse to fill in non-defaulted values.
+// In practice this means file config acts as a "second default layer":
+// CLI flag > env var > config file > struct default.
 func applyFileConfig(cfg *domain.FileConfig) {
 	if cfg == nil {
 		return

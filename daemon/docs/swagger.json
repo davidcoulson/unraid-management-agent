@@ -12592,14 +12592,17 @@
                 },
                 "temperature_celsius": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 35
                 },
                 "temperature_max_celsius": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 90
                 },
                 "wear_percent": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 1
                 }
             }
@@ -12613,6 +12616,7 @@
                 },
                 "total_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 1073741819904
                 },
                 "type": {
@@ -12621,6 +12625,7 @@
                 },
                 "used_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 173512880128
                 }
             }
@@ -12630,10 +12635,12 @@
             "properties": {
                 "clock_mhz": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 2535
                 },
                 "fan_percent": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 0
                 },
                 "index": {
@@ -12642,10 +12649,12 @@
                 },
                 "memory_total_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 25757220864
                 },
                 "memory_used_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 13631488
                 },
                 "name": {
@@ -12654,14 +12663,17 @@
                 },
                 "power_watts": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 63.29
                 },
                 "temperature_celsius": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 34
                 },
                 "utilization_percent": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 12
                 }
             }
@@ -12745,6 +12757,7 @@
                 },
                 "value": {
                     "type": "string",
+                    "x-nullable": true,
                     "example": "144"
                 }
             }

@@ -12594,14 +12594,17 @@ const docTemplate = `{
                 },
                 "temperature_celsius": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 35
                 },
                 "temperature_max_celsius": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 90
                 },
                 "wear_percent": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 1
                 }
             }
@@ -12615,6 +12618,7 @@ const docTemplate = `{
                 },
                 "total_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 1073741819904
                 },
                 "type": {
@@ -12623,6 +12627,7 @@ const docTemplate = `{
                 },
                 "used_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 173512880128
                 }
             }
@@ -12632,10 +12637,12 @@ const docTemplate = `{
             "properties": {
                 "clock_mhz": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 2535
                 },
                 "fan_percent": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 0
                 },
                 "index": {
@@ -12644,10 +12651,12 @@ const docTemplate = `{
                 },
                 "memory_total_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 25757220864
                 },
                 "memory_used_bytes": {
                     "type": "integer",
+                    "x-nullable": true,
                     "example": 13631488
                 },
                 "name": {
@@ -12656,14 +12665,17 @@ const docTemplate = `{
                 },
                 "power_watts": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 63.29
                 },
                 "temperature_celsius": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 34
                 },
                 "utilization_percent": {
                     "type": "number",
+                    "x-nullable": true,
                     "example": 12
                 }
             }
@@ -12747,6 +12759,7 @@ const docTemplate = `{
                 },
                 "value": {
                     "type": "string",
+                    "x-nullable": true,
                     "example": "144"
                 }
             }

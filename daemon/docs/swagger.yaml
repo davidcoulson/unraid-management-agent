@@ -5031,12 +5031,15 @@ definitions:
       temperature_celsius:
         example: 35
         type: number
+        x-nullable: true
       temperature_max_celsius:
         example: 90
         type: number
+        x-nullable: true
       wear_percent:
         example: 1
         type: number
+        x-nullable: true
     type: object
   dto.VMGuestFilesystem:
     properties:
@@ -5046,42 +5049,51 @@ definitions:
       total_bytes:
         example: 1073741819904
         type: integer
+        x-nullable: true
       type:
         example: NTFS
         type: string
       used_bytes:
         example: 173512880128
         type: integer
+        x-nullable: true
     type: object
   dto.VMGuestGPU:
     properties:
       clock_mhz:
         example: 2535
         type: number
+        x-nullable: true
       fan_percent:
         example: 0
         type: number
+        x-nullable: true
       index:
         example: 0
         type: integer
       memory_total_bytes:
         example: 25757220864
         type: integer
+        x-nullable: true
       memory_used_bytes:
         example: 13631488
         type: integer
+        x-nullable: true
       name:
         example: NVIDIA GeForce RTX 4090
         type: string
       power_watts:
         example: 63.29
         type: number
+        x-nullable: true
       temperature_celsius:
         example: 34
         type: number
+        x-nullable: true
       utilization_percent:
         example: 12
         type: number
+        x-nullable: true
     type: object
   dto.VMGuestInfo:
     properties:
@@ -5141,6 +5153,7 @@ definitions:
       value:
         example: "144"
         type: string
+        x-nullable: true
     type: object
   dto.VMInfo:
     properties:

@@ -241,7 +241,7 @@ func (p *vmGuestPoller) updateAll(ctx context.Context) {
 			p.setOffline(vm, false, "libvirt connection failed")
 			continue
 		}
-		p.updateVM(conn, vm)
+		p.updateVM(ctx, conn, vm)
 		_ = conn.Disconnect()
 	}
 	p.publish()
@@ -260,7 +260,7 @@ func runningDomain(conn guestConn, vm string) (libvirt.Domain, bool, error) {
 	return dom, libvirt.DomainState(state) == libvirt.DomainRunning, nil
 }
 
-func (p *vmGuestPoller) updateVM(conn guestConn, vm string) {
+func (p *vmGuestPoller) updateVM(ctx context.Context, conn guestConn, vm string) {
 	dom, running, err := runningDomain(conn, vm)
 	if err != nil || !running {
 		msg := ""
@@ -292,7 +292,7 @@ func (p *vmGuestPoller) updateVM(conn guestConn, vm string) {
 	if osInfo.ID == "mswindows" {
 		smi = guestNvidiaSMIWindows
 	}
-	smiOut, gpuErr := p.exec(conn, dom, vm+"/nvidia-smi", smi, []string{guestNvidiaSMIQuery, "--format=csv,noheader,nounits"})
+	smiOut, gpuErr := p.exec(ctx, conn, dom, vm+"/nvidia-smi", smi, []string{guestNvidiaSMIQuery, "--format=csv,noheader,nounits"})
 	var gpus []dto.VMGuestGPU
 	if gpuErr == nil {
 		gpus = parseNvidiaSMI(smiOut)
@@ -304,7 +304,7 @@ func (p *vmGuestPoller) updateVM(conn guestConn, vm string) {
 	var diskErr error
 	if osInfo.ID == "mswindows" {
 		var out string
-		out, diskErr = p.exec(conn, dom, vm+"/disks", guestPowerShell, []string{"-NoProfile", "-NonInteractive", "-Command", guestDiskScript})
+		out, diskErr = p.exec(ctx, conn, dom, vm+"/disks", guestPowerShell, []string{"-NoProfile", "-NonInteractive", "-Command", guestDiskScript})
 		if diskErr == nil {
 			disks, diskErr = parseGuestDisks(out)
 		}
@@ -391,7 +391,7 @@ func (p *vmGuestPoller) runSensor(ctx context.Context, s domain.VMGuestSensorCon
 		case err != nil:
 			errMsg = err.Error()
 		case running:
-			raw, err := p.exec(conn, dom, s.VM+"/sensor/"+s.Name, s.Command[0], s.Command[1:])
+			raw, err := p.exec(ctx, conn, dom, s.VM+"/sensor/"+s.Name, s.Command[0], s.Command[1:])
 			if err != nil {
 				errMsg = err.Error()
 				logger.Debug("VM guest agent: %s: sensor %s: %v", s.VM, s.Name, err)
@@ -669,7 +669,11 @@ func agentCall(conn guestConn, dom libvirt.Domain, cmd string, args any, out any
 // exec runs a program inside the guest without a shell and returns its
 // standard output. A command that did not finish last time is not started
 // again until the guest reports it exited, which also releases its status.
-func (p *vmGuestPoller) exec(conn guestConn, dom libvirt.Domain, key, path string, args []string) (string, error) {
+// Polling stops as soon as ctx is cancelled.
+func (p *vmGuestPoller) exec(ctx context.Context, conn guestConn, dom libvirt.Domain, key, path string, args []string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	p.mu.Lock()
 	pid, busy := p.pending[key]
 	p.mu.Unlock()
@@ -709,7 +713,14 @@ func (p *vmGuestPoller) exec(conn guestConn, dom libvirt.Domain, key, path strin
 			p.mu.Unlock()
 			return "", err
 		}
-		time.Sleep(guestExecPoll)
+		// Cancellation leaves the PID unrecorded: the poller is shutting down.
+		timer := time.NewTimer(guestExecPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 
