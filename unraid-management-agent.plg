@@ -3,15 +3,15 @@
 <!DOCTYPE PLUGIN [
     <!ENTITY name        "unraid-management-agent">
     <!ENTITY author      "Ruaan Deysel">
-    <!ENTITY version     "2026.09.01.1">
+    <!ENTITY version     "2026.10.17.01">
     <!ENTITY gitURL      "https://github.com/davidcoulson/&name;">
-    <!ENTITY pluginURL   "&gitURL;/raw/release/fork-fan60/&name;.plg">
+    <!ENTITY pluginURL   "&gitURL;/raw/release/fork/&name;.plg">
     <!ENTITY supportURL  "https://forums.unraid.net/topic/196675-plugin-unraid-management-agent">
     <!ENTITY launch      "Settings/unraid-management-agent">
     <!ENTITY bundle      "&name;-&version;.tgz">
     <!ENTITY bundleURL   "&gitURL;/releases/download/v&version;/&bundle;">
-    <!ENTITY md5         "e2f65fdab2794be6a7c846186741af71"> <!-- pragma: allowlist secret -->
-    <!ENTITY sha256      "86b1cb1e1d3cefa1b2a6a168bfe2aa19516103c66ea70c17ab362c098fab78c0"> <!-- pragma: allowlist secret -->
+    <!ENTITY md5         "e117041ad035f3da39b676639f4372bf"> <!-- pragma: allowlist secret -->
+    <!ENTITY sha256      "a597f757e3af553481f7c25acd688c1815e93d7bad383c14d9257dd540cdfaf2"> <!-- pragma: allowlist secret -->
 ]>
 
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" icon="server" min="7.2.0" pluginURL="&pluginURL;" support="&supportURL;" project="&gitURL;" readme="&gitURL;#readme">
