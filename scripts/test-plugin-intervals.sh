@@ -98,7 +98,9 @@ run_start() {
     shift
     printf '%s\n' "$cfg" >"$SANDBOX/config/config.cfg"
     rm -f "$SANDBOX/env.out"
-    PATH="$SANDBOX/bin:$PATH" bash "$SANDBOX/scripts/start" >/dev/null
+    # Clear the intervals so values exported by the caller cannot leak in.
+    env $(printf -- '-u %s ' "${INTERVALS[@]}") PATH="$SANDBOX/bin:$PATH" \
+        bash "$SANDBOX/scripts/start" >/dev/null
     for i in $(seq 1 50); do
         [ -s "$SANDBOX/env.out" ] && break
         sleep 0.1
