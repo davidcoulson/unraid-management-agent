@@ -25,8 +25,16 @@ set_error_handler(function ($severity, $message, $file, $line) {
     throw new ErrorException($message, 0, $severity, $file, $line);
 });
 
+// Render without the host's saved settings, so the tests see the fallback
+// defaults even when they run on an Unraid server with a config.cfg.
+$body = preg_replace('/^\$config_file = .*;$/m', '$config_file = "/nonexistent/uma-ui-test/config.cfg";', $parts[1], 1, $count);
+if ($count !== 1) {
+    fwrite(STDERR, "cannot find the \$config_file assignment in $page\n");
+    exit(1);
+}
+
 $tmp = tempnam(sys_get_temp_dir(), 'uma-page-');
-file_put_contents($tmp, $parts[1]);
+file_put_contents($tmp, $body);
 ob_start();
 include $tmp;
 $body = ob_get_clean();
