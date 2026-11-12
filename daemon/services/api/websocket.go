@@ -155,19 +155,27 @@ func clientRemoteAddr(c *WSClient) string {
 	return "unknown"
 }
 
+// optInTopics are sent only to clients that subscribe to them by name. They
+// carry whole ZFS collections (snapshots pass 1 MiB with a few thousand), which
+// overflow clients' default frame limits, and no current client uses them.
+var optInTopics = map[string]bool{
+	constants.TopicZFSSnapshotsUpdate.Name: true,
+	constants.TopicZFSDatasetsUpdate.Name:  true,
+}
+
 // wantsTopic returns true if the client is subscribed to the given topic.
-// A nil topics map means the client receives all topics (default).
+// A nil topics map means the client receives all topics except optInTopics (default).
 func (c *WSClient) wantsTopic(topic string) bool {
 	c.topMu.RLock()
 	defer c.topMu.RUnlock()
 	if c.topics == nil {
-		return true
+		return !optInTopics[topic]
 	}
 	return c.topics[topic]
 }
 
 // setTopics updates the client's topic filter.
-// A nil or empty list resets to receiving all topics.
+// A nil or empty list resets to the default: all topics except optInTopics.
 func (c *WSClient) setTopics(topics []string) {
 	c.topMu.Lock()
 	defer c.topMu.Unlock()
