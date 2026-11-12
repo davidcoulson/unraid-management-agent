@@ -343,3 +343,19 @@ func BenchmarkWSHubBroadcast(b *testing.B) {
 		hub.Broadcast("update", map[string]int{"count": i})
 	}
 }
+
+func TestWSClientOptInTopics(t *testing.T) {
+	c := &WSClient{}
+	if !c.wantsTopic("system_update") {
+		t.Error("unfiltered client should get ordinary topics")
+	}
+	for _, topic := range []string{"zfs_snapshots_update", "zfs_datasets_update"} {
+		if c.wantsTopic(topic) {
+			t.Errorf("unfiltered client should not get opt-in topic %s", topic)
+		}
+	}
+	c.setTopics([]string{"zfs_snapshots_update"})
+	if !c.wantsTopic("zfs_snapshots_update") || c.wantsTopic("zfs_datasets_update") {
+		t.Error("explicit subscription should deliver only the named opt-in topic")
+	}
+}
